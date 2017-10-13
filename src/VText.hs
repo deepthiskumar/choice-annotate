@@ -1,4 +1,4 @@
-
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 module VText where
 
 {-
@@ -38,6 +38,9 @@ import Pretty (showChc,showChcNoColor)
 
 import Data.List ((\\),nub)
 
+import Control.DeepSeq (NFData)
+import GHC.Generics (Generic)
+
 
 type Dim = Int
 
@@ -49,10 +52,11 @@ type Text = String
 
 -- Variational text
 --
-newtype VText = VText [Segment]
+data VText = VText ![Segment] deriving(Generic, NFData)
 
-data Segment = Plain Text
-             | Chc Dim VText VText
+data Segment = Plain !Text
+             | Chc !Dim !VText !VText
+             deriving(Generic, NFData)
 
 instance Show VText where
   show (VText ss) = concatMap show ss

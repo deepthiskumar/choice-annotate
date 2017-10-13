@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleInstances, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleInstances, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass #-}
 
 module CCLibPat where
 
@@ -12,11 +12,14 @@ module CCLibPat where
   import VText
   import Pretty
   import Debug.Trace ( trace )
+  import qualified Data.Set as S
+  import Control.DeepSeq
+  import GHC.Generics (Generic)
   --import Data.Vector.Unboxed as Uvector  hiding ((++),concat,length,tail,map,take,drop,concatMap,maximum,reverse)
 
   escape = "ⱺ"
 
-  data Sel = LSel Int | RSel Int
+  data Sel = LSel !Int | RSel !Int  deriving(Generic, NFData)
   type Selection = [Sel]
 
   data Alt = L | R deriving Eq
@@ -35,9 +38,9 @@ module CCLibPat where
 --  Customized diff
 --------------------------------------------------------------------------------
 
-  data Diff a = Same [a] | Different [a] [a] deriving Show
+  data Diff a = Same ![a] | Different ![a] ![a] deriving (Show, Generic, NFData)
   
-  data Edit a = Add a | Delete a | Update a a | NoChange a
+  data Edit a = Add !a | Delete !a | Update !a !a | NoChange !a
 
   collectDiff :: [D.Item a] -> [Diff a]
   collectDiff [] = []
@@ -82,7 +85,7 @@ module CCLibPat where
     ]
 
   partitionDiff :: Show a => [Diff a] -> [Int] -> [Diff a]
-  partitionDiff d bs = let res = p d bs in {-trace ("PartDiff: "++ show res)-} res
+  partitionDiff d bs = p d bs {-trace ("PartDiff: "++ show res)-}
     where
       p :: Show a => [Diff a] -> [Int] -> [Diff a]
       p [] _ = []
@@ -106,8 +109,8 @@ module CCLibPat where
 
   diffBoundaries :: [Diff a] -> [Int]
   diffBoundaries [] = []
-  diffBoundaries ((Same x):ds) = 0 : (map (+ length x) $ diffBoundaries ds)
-  diffBoundaries ((Different x _):ds) = 0 : (map (+ length x) $ diffBoundaries ds)
+  diffBoundaries ((Same x):ds) = 0:length x:diffBoundaries ds --0 : (map (+ length x) $ diffBoundaries ds)
+  diffBoundaries ((Different x _):ds) = 0:length x:diffBoundaries ds--0 : (map (+ length x) $ diffBoundaries ds)
 
   diffL :: [Diff a] -> [a]
   diffL [] = []
@@ -169,10 +172,14 @@ module CCLibPat where
     
   getwords :: String -> [String]
   getwords ""    = []
-  getwords line  = 
-   let (word, s1)   = break (==' ') line
-       (spaces, s2) = break (/=' ') s1
-   in noEmpty word ++ noEmpty spaces ++ getwords s2
+  getwords line  = w $! break (==' ') line
+   where
+     w :: (String,String) -> [String]
+     w (word, s1) = u (break (/=' ') s1) word
+     
+     u :: (String,String) -> String -> [String]
+     u (spaces, s2) word1 = noEmpty word1 ++ noEmpty spaces ++ getwords s2
+   
    
   noEmpty :: String -> [String]
   noEmpty "" = []
@@ -233,20 +240,29 @@ module CCLibPat where
   dimensions :: VText -> [Int]
   dimensions (VText []) = []
   dimensions (VText ((Plain _):vs)) = dimensions (VText vs)
-  dimensions (VText ((Chc d l r):vs)) = let dims = dimensions (VText vs) in dims `seq`
-    ([d] ++
+  dimensions (VText ((Chc d l r):vs)) = --let dims = dimensions (VText vs) in dims `seq`
+      (d :
       (dimensions l) ++
-      (dimensions r) `union`
-      dims )
+      (dimensions r) ++
+      dimensions (VText vs) )--dims )
  -- a choice will not have nested choice with dimension same as the outer choice. 
  -- This invariant is applicable in the change commit history scenario only
  -- Therefore `union` can be replaced with simple concatenation
+ 
+  betterNub :: [Int] -> [Int]
+  betterNub = n S.empty
+    where
+      n :: S.Set Int -> [Int] -> [Int]
+      n _ []     = []
+      n s (x:xs) 
+        | S.member x s = n s xs
+        | otherwise    = x : n (S.insert x s) xs
 
   nextDimension :: VText -> Int
   nextDimension = succ . maximum . dimensions
 
   latest :: VText -> [Sel]
-  latest = map RSel . dimensions
+  latest = map RSel . (betterNub.dimensions)
 ---------------------------------------------------------------------------------
   ppVText :: VText -> String
   ppVText (VText xs) = concatMap show xs
@@ -281,34 +297,57 @@ module CCLibPat where
 
 
   denormalizeV ::Selection -> VText -> [Int] -> VText
-  denormalizeV s v b = fst $ d s v b --let x = d s v b in x `seq` fst $ x
-    where
-      (^:) :: Segment -> (VText, [Int]) -> (VText, [Int])
-      x ^: (VText y, z) = (VText(x:y), z)
+  denormalizeV s v b = let i = (((d $!! s) $!! v) $!! b) in fst $!! i
+  
+  (^:) :: Segment -> (VText, [Int]) -> (VText, [Int])
+  x ^: (VText y, z) = (VText(x:y), z)
 
-      d :: Selection -> VText -> [Int] -> (VText, [Int])
-      d _ (VText []) bs = (VText [], bs)
-      d _ vs [] = (vs, [])
-      d s vs (0:bs) = d s vs bs
-      d s (VText((Chc dim l r):vs)) bs = case dim `asSelectedIn` s of
-        L -> e id   l r
-        R -> e flip r l
-        where
-          e f x y = ((f $ Chc dim) x' y) ^: z
-            where
-              (x', bs') = d s x bs
-              z = (d s (VText vs) bs')
-      d s (VText((Plain x):vs)) (b:bs) = {-trace ("Denormalize: " ++ show x ++ " | " ++ show b )-}(case length (tokenizer x) `compare` b of
-        EQ -> (Plain x) ^: z
-        LT -> (Plain x) ^: (d s (VText vs) bs'')
-        GT -> (Plain (concat x')) ^: z')
-        where
-          bs1'   = map (subtract b) $! b:bs
+  d :: Selection -> VText -> [Int] -> (VText, [Int])
+  d _ (VText []) bs = (VText [], bs)
+  d _ vs [] = (vs, [])
+  d s vs (0:bs) = d s vs bs
+  d s (VText((Chc dim l r):vs)) bs = case dim `asSelectedIn` s of
+     L -> e id   l r
+     R -> e flip r l
+     where
+       e f x y = ((f $ Chc dim) x' y) ^: z
+         where
+           (x', bs') = ((d $!! s) $!! x) $!! bs
+           z =( ((d $!! s) $!! (VText vs)) $!! bs')
+  d s (VText((Plain x):vs)) (b:bs) = plainHelper (length (tokenizer x) `compare` b) s x (VText vs) (b:bs) 
+      
+      
+      {-trace ("Denormalize: " ++ show x ++ " | " ++ show b )-} {-(case length (tokenizer x) `compare` b of
+        EQ -> ((^:) $!! (Plain $!! x)) $!! z
+        LT -> trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined--((Plain x) ^: (d s (VText vs) bs'')) -- is this a valid case??
+        GT -> (((^:) $!! (Plain $!! (concat $!! x'))) $!! z'))
+         where
+          bs1'  = (map (subtract b) $ b:bs)
           bs''  = map (subtract $ length (tokenizer x)) (b:bs)
-          x'    = take b (tokenizer x)
-          x''   = drop b (tokenizer x)
-          z     = (d s (VText vs) $ tail bs1')
-          z'    = bs1' `seq` (d s (VText((Plain $ (concat $ x'')):vs)) $! tail bs1')
+          x'    = (take $!! b) $!! (tokenizer $!! x)
+          x''   = (drop $!! b) $!! (tokenizer $!! x)
+          z     = (((d $!! s) $!! (VText $!! vs)) $!! bs)--tail bs1')
+          z'    = (((d $!! s) $!! (VText $!! ((Plain $!! (concat $!! x'')):vs))) $!! bs)--tail bs1')-}
+          
+          --How to implment such that we do not have to subtract. create like a list of lists and just remove the head element
+          
+  plainHelper :: Ordering -> Selection -> String -> VText -> [Int] -> (VText, [Int])
+  plainHelper EQ s x vs (b:bs)         = ((^:) $!! (Plain $!! x)) $!! (z s vs bs)
+  plainHelper LT s x (VText vs) (b:bs) = trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined
+  plainHelper GT s x vs (b:bs)         = (((^:) $!! (Plain $!! (concat $!! (x' b x)))) $!! ((((z' $!! s) $!! x) $!! vs) $!! (b:bs)) )
+  
+  x' :: Int -> String -> [String]
+  x' b x = (take $!! b) $!! (tokenizer $!! x)
+  
+  x'' :: Int -> String -> [String]
+  x'' b x  = (drop $!! b) $!! (tokenizer $!! x)
+  
+  z :: Selection -> VText -> [Int] -> (VText, [Int])
+  z s vs bs = (((d $!! s) $!! (vs)) $!! bs)--tail bs1')
+  
+  z' :: Selection -> String -> VText -> [Int] -> (VText, [Int])
+  z' s x (VText vs) (b:bs) = (((d $!! s) $!! (VText $!! ((Plain $!! (concat $!! (x'' b x))):vs))) $!! bs)
+  
 
   normalize :: VText -> VText
   normalize (VText []) = VText []
@@ -352,11 +391,11 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
 --------------------------------------------------------------------------------
 
   distill :: Int -> VText -> Selection -> Text -> VText
-  distill dim v s n = normalize $ fst $ l pv d
+  distill dim v s n = (normalize $ fst $ ((l $ pv) $ d)) --deepseq pv
     where
       (o, m) = s `applySelectionWithMap` v
-      d = {-trace ("Old: "++ show o ++ ",tokenized: "++ show (tokenizer o) ++ ", New: " ++ show n ++ ",tokenized:" ++ show (tokenizer n) ++ "VMap" ++ show m)-} (partitionDiff ((tokenizer o) -?- (tokenizer n)) $ map fst m)
-      pv = {-trace ("VText: "++show v)-} (denormalizeV s v $ diffBoundaries d)
+      d      = ((partitionDiff $ ((tokenizer $ o) -?- (tokenizer $ n))) $ map fst m)
+      pv     = trace (" Boundaries: "++ show (diffBoundaries $ d)) (((denormalizeV $!! s) $!! v) $!! diffBoundaries $ d)
 
       (^:) :: Segment-> (VText, [Diff String]) -> (VText, [Diff String])
       x ^: (VText y, z) = (VText (x:y), z)

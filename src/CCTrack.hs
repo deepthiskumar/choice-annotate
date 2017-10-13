@@ -5,6 +5,7 @@ import System.Directory (doesFileExist)
 import CCLibPat (distill, latest, ppVText, ccParser, dimensions,showVText)
 import VText
 import Data.List
+import Control.DeepSeq
 
 errorIf :: Bool -> String -> IO ()
 errorIf b m = if b then error m else return ()
@@ -44,18 +45,17 @@ main = do
     else do
       vsource <- readFile target
       --print vsource
-      let e_vtext = ccParser $! (stripNewline vsource)
+      let e_vtext = ccParser $!! (stripNewline $!! vsource)
       let v_parsed = case e_vtext of { Left _ -> False; Right _ -> True } 
       
       errorIf (not v_parsed) $ "Failed to parse " ++ target
       let Right vtext = e_vtext
-      let dtext = distill (dimension) vtext (latest vtext) (stripNewline source)
+      let dtext = (((distill $!! (dimension)) $!! (vtext)) $!! (latest vtext)) $!! (stripNewline source) 
       
       
       {-let dtext = let nvtext = latest vtext 
                       nsource = stripNewline source 
   	          in nvtext `seq` nsource `seq` dimension `seq` distill (dimension) vtext nvtext nsource-}
 
-      writeFile target 
-        $! showVText dtext
+      ((writeFile $!! target) $!! (showVText $!! dtext))
  
