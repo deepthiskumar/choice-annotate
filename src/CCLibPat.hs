@@ -8,14 +8,12 @@ module CCLibPat where
   import Text.ParserCombinators.Parsec.Char
   import qualified Data.Algorithm.Patience as D
   import Data.List.Split
-  --import qualified Diff as D
   import VText
   import Pretty
   import Debug.Trace ( trace )
   import qualified Data.Set as S
   import Control.DeepSeq
   import GHC.Generics (Generic)
-  --import Data.Vector.Unboxed as Uvector  hiding ((++),concat,length,tail,map,take,drop,concatMap,maximum,reverse)
 
   escape = "ⱺ"
 
@@ -132,32 +130,6 @@ module CCLibPat where
   showSegment (Plain t)     = t--showText t--intercalate " " t
   showSegment (Chc d v v') = showChcNoColor d (map showVText [v,v'])
   
-  {-showText :: Text -> String
-  showText []     = ""
-  showText (s:ss) = s ++ showText ss-}
-  
-  {-showText :: Text -> String
-  showText []           = []
-  showText ("\n":ss)    = {-"\n" ++ -}showText ss
-  showText (s:"\n":ss)  = s {-++ "\n"-} ++ showText ss
-  showText [s]          = s
-  showText (s:ss)       = s {-++ " " -}++ showText ss-}
-  
-  {-words' :: String -> [String]
-  words' s = case dropWhile (=='\n') s of
-    "" -> [] --TODO what if there is just one line?
-    s' -> words'' w ++ (if not (null s'') then ["\n"] ++ words' s'' else [])
-      where (w,s'') = break (== '\n') s'
-  
-  {-words' :: String -> [String]
-  words' s  =  case dropWhile {-partain:Char.-}(==' ') s of
-                                "" -> []
-                                s' -> (newLine w) ++ words' s''
-                                      where (w, s'') =
-                                             break {-partain:Char.-}(== ' ') s'-}
-  words'' :: String -> [String]
-  words'' " " = [" "]
-  words'' s = words s-}
   
   --tokenizes into words and also maintains the spaces between them as tokens.
   tokenizer :: String -> [String]
@@ -185,23 +157,6 @@ module CCLibPat where
   noEmpty "" = []
   noEmpty s  = [s]
   
-  {-newLine :: String -> [String]
-  newLine s = intersperse "\n" (lines s)
-  
-  endsWithNewLine :: VText -> Bool
-  endsWithNewLine (VText []) = False
-  endsWithNewLine (VText vs) = endsWithNewLine' (last vs)
-  
-  endsWithNewLine' :: Segment -> Bool
-  endsWithNewLine' (Plain s) = endsWithNewLine'' s
-  endsWithNewLine' (Chc d v1 v2) = endsWithNewLine v1 || endsWithNewLine v2
-  
-  endsWithNewLine'' :: [String] -> Bool
-  endsWithNewLine'' [] = False
-  endsWithNewLine'' ss = case (last.last) ss of
-   '\n'      -> True
-   otherwise -> False-}
-
 --  Parsers
 --------------------------------------------------------------------------------
 
@@ -297,7 +252,7 @@ module CCLibPat where
 
 
   denormalizeV ::Selection -> VText -> [Int] -> VText
-  denormalizeV s v b = let i = (((d $!! s) $!! v) $!! b) in fst $!! i
+  denormalizeV s v b = fst $ (d s v b)
   
   (^:) :: Segment -> (VText, [Int]) -> (VText, [Int])
   x ^: (VText y, z) = (VText(x:y), z)
@@ -312,11 +267,29 @@ module CCLibPat where
      where
        e f x y = ((f $ Chc dim) x' y) ^: z
          where
-           (x', bs') = ((d $!! s) $!! x) $!! bs
-           z =( ((d $!! s) $!! (VText vs)) $!! bs')
+           (x', bs') = ((d $ s) $ x) $ bs
+           z =( ((d $ s) $ (VText vs)) $ bs')
   d s (VText((Plain x):vs)) (b:bs) = plainHelper (length (tokenizer x) `compare` b) s x (VText vs) (b:bs) 
-      
-      
+          
+  plainHelper :: Ordering -> Selection -> String -> VText -> [Int] -> (VText, [Int])
+  plainHelper EQ s x vs (b:bs)         = ((^:) $ (Plain $ x)) $ (z s vs bs)
+  plainHelper LT s x (VText vs) (b:bs) = trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined --unknown case
+  plainHelper GT s x vs (b:bs)         = (((^:) $ (Plain $ (concat $ (x' b x)))) $!! ((((z' $!! s) $!! x) $!! vs) $!! (b:bs)) )
+  
+  x' :: Int -> String -> [String]
+  x' b x = (take $ b) $ (tokenizer $ x)
+  
+  x'' :: Int -> String -> [String]
+  x'' b x  = (drop $ b) $ (tokenizer $ x)
+  
+  z :: Selection -> VText -> [Int] -> (VText, [Int])
+  z s vs bs = (((d $ s) $ (vs)) $ bs)--tail bs1')
+  
+  z' :: Selection -> String -> VText -> [Int] -> (VText, [Int])
+  z' s x (VText vs) (b:bs) = (((d $ s) $!! (VText $!! ((Plain $ (concat $!! (x'' b x))):vs))) $!! bs)
+  
+  
+        
       {-trace ("Denormalize: " ++ show x ++ " | " ++ show b )-} {-(case length (tokenizer x) `compare` b of
         EQ -> ((^:) $!! (Plain $!! x)) $!! z
         LT -> trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined--((Plain x) ^: (d s (VText vs) bs'')) -- is this a valid case??
@@ -330,23 +303,6 @@ module CCLibPat where
           z'    = (((d $!! s) $!! (VText $!! ((Plain $!! (concat $!! x'')):vs))) $!! bs)--tail bs1')-}
           
           --How to implment such that we do not have to subtract. create like a list of lists and just remove the head element
-          
-  plainHelper :: Ordering -> Selection -> String -> VText -> [Int] -> (VText, [Int])
-  plainHelper EQ s x vs (b:bs)         = ((^:) $!! (Plain $!! x)) $!! (z s vs bs)
-  plainHelper LT s x (VText vs) (b:bs) = trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined
-  plainHelper GT s x vs (b:bs)         = (((^:) $!! (Plain $!! (concat $!! (x' b x)))) $!! ((((z' $!! s) $!! x) $!! vs) $!! (b:bs)) )
-  
-  x' :: Int -> String -> [String]
-  x' b x = (take $!! b) $!! (tokenizer $!! x)
-  
-  x'' :: Int -> String -> [String]
-  x'' b x  = (drop $!! b) $!! (tokenizer $!! x)
-  
-  z :: Selection -> VText -> [Int] -> (VText, [Int])
-  z s vs bs = (((d $!! s) $!! (vs)) $!! bs)--tail bs1')
-  
-  z' :: Selection -> String -> VText -> [Int] -> (VText, [Int])
-  z' s x (VText vs) (b:bs) = (((d $!! s) $!! (VText $!! ((Plain $!! (concat $!! (x'' b x))):vs))) $!! bs)
   
 
   normalize :: VText -> VText
@@ -395,7 +351,7 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
     where
       (o, m) = s `applySelectionWithMap` v
       d      = ((partitionDiff $ ((tokenizer $ o) -?- (tokenizer $ n))) $ map fst m)
-      pv     = trace (" Boundaries: "++ show (diffBoundaries $ d)) (((denormalizeV $!! s) $!! v) $!! diffBoundaries $ d)
+      pv     = {-trace (" Boundaries: "++ show (diffBoundaries $ d))-} (((denormalizeV $ s) $ v) $ diffBoundaries $ d)
 
       (^:) :: Segment-> (VText, [Diff String]) -> (VText, [Diff String])
       x ^: (VText y, z) = (VText (x:y), z)

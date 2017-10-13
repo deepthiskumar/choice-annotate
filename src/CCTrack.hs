@@ -1,5 +1,5 @@
-import Prelude hiding (readFile)
-import System.IO.Strict (readFile)
+import Prelude hiding (readFile, writeFile)
+import System.IO.Strict (readFile, writeFile)
 import System.Environment (getArgs)
 import System.Directory (doesFileExist)
 import CCLibPat (distill, latest, ppVText, ccParser, dimensions,showVText)
@@ -28,7 +28,6 @@ main = do
   let targetFile = (args !! 2)
   exists <- doesFileExist file
   let target = targetFile ++ ".v"
-  --let target = file ++ ".v"
   vexists <- doesFileExist target
   
   errorIf (length args /= 3) "Usage: CCTrack <filename> <dimension> <target filename>"
@@ -45,17 +44,11 @@ main = do
     else do
       vsource <- readFile target
       --print vsource
-      let e_vtext = ccParser $!! (stripNewline $!! vsource)
+      let e_vtext = ccParser $ (stripNewline $ vsource)
       let v_parsed = case e_vtext of { Left _ -> False; Right _ -> True } 
       
       errorIf (not v_parsed) $ "Failed to parse " ++ target
       let Right vtext = e_vtext
-      let dtext = (((distill $!! (dimension)) $!! (vtext)) $!! (latest vtext)) $!! (stripNewline source) 
-      
-      
-      {-let dtext = let nvtext = latest vtext 
-                      nsource = stripNewline source 
-  	          in nvtext `seq` nsource `seq` dimension `seq` distill (dimension) vtext nvtext nsource-}
-
-      ((writeFile $!! target) $!! (showVText $!! dtext))
+      let dtext = (((distill $ (dimension)) $ (vtext)) $ (latest vtext)) $ (stripNewline source) 
+      writeFile target (showVText dtext)
  
