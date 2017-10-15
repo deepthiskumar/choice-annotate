@@ -1,0 +1,79 @@
+Profiling
+
+To run profiling, profiling libraries need to be nstalled for the libraries being used. 
+To automatically install the profiling libraries for future installations edit the ~/.cabal/config and set the profiling options to True.
+To install profiling libraries for 'base'
+	sudo apt-get install libghc??-prof
+
+
+Haskell Libraries required to run CC Track	
+
+cabal install text --reinstall --enable-library-profiling
+cabal install text --reinstall mtl-2.2.1 --enable-library-profiling
+cabal install parsec diff --enable-library-profiling
+cabal install strict --enable-library-profiling
+cabal install vector --enable-library-profiling  --if needed
+--Patience Diff algorithm
+cabal install patience --reinstall --enable-library-profiling
+cabal install split --reinstall --enable-library-profiling
+
+cabal install --only-dependencies --enable-library-profiling
+or
+Alternatively you can add a “cabal.config” file to the root of your project with the following line:
+library-profiling: True
+cabal install --only-dependencies
+
+Profiling commands
+ghc -prof -fprof-auto -rtsopts -i../ -O2 -v CCTrack.hs
+
+./CCTrack README.ja.md 99992 READMENew.ja.md +RTS -hc -L100
+./CCTrack README.ja.md 99992 +RTS -hd
+./CCTrack README.ja.md 99992 +RTS -hr
+./CCTrack README.ja.md 99992 +RTS -hy
+
+To convert from .hp to .ps file
+hp2ps -d CCTrack.hp
+
+to uninstall a package 
+sudo ghc-pkg unregister --force vector
+
+
+-------------------------------------------------------------------------------------------------------------------------------
+cabal upgrade
+
+cabal install cabal-install --prefix=$HOME/.cabal
+
+or 
+
+cabal install --only-dependencies --reinstall (make sure to reinstall all the latest packages)
+cabal install cabal-install
+
+to install ghc from the downloaded binary
+https://downloads.haskell.org/~ghc/6.10.1/docs/html/users_guide/installing-bin-distrib.html
+
+---------------------------------------------------------------------------------------------------------------------------------
+Commands executed in babylon
+-----------------------------
+
+login:
+ssh -E ~/Documents/Research/babylonLogFile.txt kumarde@babylon.eecs.oregonstate.edu
+
+Mount remote file system onto local filesystem
+
+sshfs kumarde@babylon.eecs.oregonstate.edu:/nfs/guille/erwig/users/kumarde ~/babylon
+sshfs umount
+
+java -jar GitAutoClone.jar ../../RepoList/Repos ../../ReposNoEncoding/
+
+java -jar CCEncodeFull.jar ../../Repos master ../src/encode/CCTrack 11 57 ../../Renames/
+
+
+
+
+
+
+
+
+
+
+
