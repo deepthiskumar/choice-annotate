@@ -22,10 +22,15 @@ module CCLibPat where
   data Segment = Str Text | Chc Dim VString VString
              deriving(Show, Eq, Generic, NFData)
 
+  --intermediate vstring that has tokens.
+  --This is to maintain the tokens instead of the tokenize-concat-tokenize-concat
+  --that happens in the denormalize function and l       
+  type VStringIntr = [SegmentIntr]
+  data SegmentIntr = StrIntr [Text] |ChcIntr Dim VStringIntr VStringIntr
 
   escape = "ⱺ"
 
-  data Sel = LSel !Int | RSel !Int  deriving(Generic, NFData)
+  data Sel = LSel !Dim | RSel !Dim  deriving(Generic, NFData)
   type Selection = [Sel]
 
   data Alt = L | R deriving Eq
@@ -285,7 +290,7 @@ module CCLibPat where
   plainHelper :: Ordering -> Selection -> Text -> VString -> [Int] -> (VString, [Int])
   plainHelper EQ s x vs (b:bs) = ((^:) $ (Str x)) $ (z s vs bs)
   plainHelper LT s x vs (b:bs) = trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined --unknown case
-  plainHelper GT s x vs (b:bs) = (((^:) $ (Str (T.concat $ (x' b x)))) $!! ((((z' $!! s) $!! x) $!! vs) $!! (b:bs)) )
+  plainHelper GT s x vs (b:bs) = (Str (T.concat (x' b x))) ^: (z' s x (T.length (T.concat (x' b x))) vs (b:bs))
   
   x' :: Int -> Text -> [Text]
   x' b x = (L.take $ b) $ (tokenizer $ x)
@@ -296,8 +301,8 @@ module CCLibPat where
   z :: Selection -> VString -> [Int] -> (VString, [Int])
   z s vs bs = (((d $ s) $ (vs)) $ bs)--tail bs1')
   
-  z' :: Selection -> Text -> VString -> [Int] -> (VString, [Int])
-  z' s x vs (b:bs) = d s (Str (T.concat (x'' b x )):vs) bs--(((d $ s) $!! ((Str $ (T.concat $!! (x'' b x))):vs)) $!! bs)
+  z' :: Selection -> Text -> Int -> VString -> [Int] -> (VString, [Int])
+  z' s x rem vs (b:bs) = d s ((Str (T.drop rem x )) :vs) bs--(((d $ s) $!! ((Str $ (T.concat $!! (x'' b x))):vs)) $!! bs)
   
   
         
