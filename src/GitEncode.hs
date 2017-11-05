@@ -8,9 +8,18 @@ import Data.Text as T
 import Text.Printf (printf)
 import Control.Exception as Exc
 import System.Directory (doesFileExist)
-import Data.ByteString.Lazy.Char8 as B hiding (putStrLn, writeFile, readFile)
+import Data.ByteString.Char8 as B hiding (putStrLn, writeFile, readFile)
 import Data.Map
 
+--TODO
+{-
+1. get merge base and check if merge has conflicts --Done
+ Check sending git executable location. Add a global git config file
+2. update selections
+3. traverse the dag and encode.
+4. for now merge simply (no conflict serialize, conflict = branch(even if ours or theirs))
+5. then check complex merges
+-}
 
 type RepoInfo = Map CommitNode [(FilePath, Selection)]
 

@@ -11,7 +11,7 @@ import Data.Tuple (swap)
 import Lib.Git.Type hiding (Commit)
 import Debug.Trace
 --import Data.ByteString hiding (map, filter, head, take, drop, zip)
-import Data.ByteString.Lazy.Char8 as B hiding (map, filter, head, take, drop, zip)
+import Data.ByteString.Char8 as B hiding (map, filter, head, drop, zip)
 import Data.Text as T
 import Data.Maybe
 import Data.DateTime
@@ -24,9 +24,13 @@ data Commit = Commit{
     date :: DateTime,
     mergeCommit :: Maybe Merge}
       deriving(Show)
-
+--First parent is the branch on which othee branch was merged to.
+--Knowing the first parent helps to identify which chain of ancestors
+--to climb through in order to get to the lca otherwise the inner branches
+--could lead to a different lca
 data Merge = Merge {
-    lca :: (Node, ByteString),
+    lca :: CommitHash,
+    firstParent :: CommitHash,
     conflictedFiles :: [FilePath]}
       deriving(Show)
 
@@ -44,10 +48,10 @@ getDag :: Repo -> Branch -> IO GitDag
 getDag r b = do 
   runGitCmd r (gitCheckout b)
   log <- runGitCmd r gitlogP
-  return $ gitDAG log
+  gitDAG r log
 
 runGitCmd :: FilePath -> GitCtx a -> IO a
-runGitCmd repo command = runGit (makeConfig repo Nothing) command
+runGitCmd repo command = runGit (makeConfig repo (Just "/usr/bin/git")) command
 
 commitContext :: GitDag -> Node -> Context Commit ()
 commitContext = G.context
@@ -59,38 +63,13 @@ children g n =  [(n',fromJust (lab g n' ))| n' <- ns, isJust (lab g n' ) ]
       
 
 --mkGraph instance of fgl fails if the source node is not present
-gitDAG :: GitLog -> GitDag
-gitDAG []    = G.empty
-gitDAG lines = let (m,es) = buildListnMap lines 0 (M.empty, [])
-               in G.mkGraph (toNodeList m) es 
+gitDAG :: Repo -> GitLog -> IO GitDag
+gitDAG _ []    = return G.empty
+gitDAG r lines = do 
+   (m,es) <- buildListnMap r lines 0 (M.empty, [])
+   return $ G.mkGraph (toNodeList m) es 
 
-buildListnMap :: GitLog -> Int -> (Map CommitHash CommitNode, [UEdge]) -> (Map CommitHash CommitNode, [UEdge])
-buildListnMap [] _ p = p
-buildListnMap (l:ls) key (nMap, eList) = buildListnMap ls (key+1) (newMap, newList++eList)
-    where (commit,author,date,parents) = parseLog l--P.head $ P.take 1 $ B.words l
-          newMap  = M.insert commit (commitNode key commit author date Nothing) nMap --parents = P.drop 1 $ B.words l
-          newList = P.map (\parent -> ((fst $ fromJust $ M.lookup parent nMap),key,())) parents
-
-toNodeList :: Map CommitHash CommitNode -> [CommitNode]
-toNodeList m = P.map snd (M.toList m)  
-
-dateFormat = "%F"
-
-parseLog :: ByteString -> (CommitHash, ByteString, DateTime, [CommitHash])
-parseLog s = case B.split '|' s of
-    c:p:a:d:[] -> (c,a,fromJust $ parseDateTime dateFormat (B.unpack d),B.words p)
-    otherwise  -> error ("commit log parsing error: "++ show s) 
-
-commitNode :: Node -> CommitHash -> ByteString -> DateTime -> Maybe Merge -> CommitNode
-commitNode n c a d m = (n, Commit c a d m)
-
---TODO get conflicted files of the merge nodes
-getMergeNodes :: GitDag -> [CommitNode]
-getMergeNodes g = P.filter (\n -> let (p,_,_,_) = context g (fst n) in moreThanTwo p ) (labNodes g)
-  where moreThanTwo []  = False
-        moreThanTwo [x] = False
-        moreThanTwo _   = True
-        
+-------------------------------------------------------------------------------        
 --Git commands
 gitCheckout :: Branch -> GitCtx ()
 gitCheckout b = do
@@ -124,14 +103,98 @@ gitDiffTree (n,c) = do
        o <- gitExec "diff-tree" 
          ["--no-commit-id", "--name-only", "-r", B.unpack $ commitID c] []
        result "diff-tree" o
+       
+gitMergeBase :: [CommitHash] -> GitCtx CommitHash
+gitMergeBase xs  = do
+    o <- gitExec "show-branch" ("--merge-base" : P.map B.unpack xs) []
+    case o of
+      Right out -> return (((B.take 7).(P.head).(B.lines).(B.pack)) out )
+      Left err  -> gitError err ("Error while running git show-branch --merge-base")
+
+--for octopus merge to work there should be any conflict. So no need to check that      
+gitConflictCheck :: CommitHash -> GitCtx [FilePath]
+gitConflictCheck c = do
+    o <- gitExec "merge" [B.unpack c, "--no-commit"] []
+    case o of
+       Right out -> return []
+       Left err  -> trace (show err) getConflictedFiles --(return $ parseConflictLog msg)
+       
+getConflictedFiles :: GitCtx [FilePath]
+getConflictedFiles = do
+   o <- gitExec "diff" ["--name-only", "--diff-filter=U"] []
+   case o of
+     Right out -> gitAbort >> (return $ P.lines out)
+     Left err  -> gitError err ("Error while running git diff --name-only --diff-filter=U")
+     
+gitAbort :: GitCtx ()
+gitAbort = do 
+   o <- gitExec "merge" ["--abort"] []
+   case o of
+      Right out -> return ()
+      Left err  -> gitError err ("Error while running git merge --abort")
     
 result :: String -> Either GitFailure String -> GitCtx GitLog
 result command o = do
     case o of
       Right out -> return $ B.lines (B.pack out)
       Left err  -> gitError err ("Error while running git " ++ command)
+
+
+
+-------------------------------------------------------------------------------
+--Helpers
       
 isRoot x = x == 0
+
+buildListnMap :: Repo -> GitLog -> Int -> (Map CommitHash CommitNode, [UEdge]) -> IO (Map CommitHash CommitNode, [UEdge])
+buildListnMap _ [] _ p = return p
+buildListnMap r (l:ls) key (nMap, eList) = do
+  let (commit,author,date,parents) = parseLog l
+  let newList = P.map (\parent -> ((fst $ fromJust $ M.lookup parent nMap),key,())) parents
+  if P.length parents > 1 then do
+    runGitCmd r (gitCheckout (B.unpack $ P.head parents))
+    lca <- runGitCmd r (gitMergeBase parents)
+    files <- runGitCmd r (gitConflictCheck (P.head $ P.tail parents))
+    --runGitCmd r (gitAbort)
+    let merge = Just (Merge lca (P.head parents) files)
+    let newMap  = M.insert commit (commitNode key commit author date merge) nMap
+    buildListnMap r ls (key+1) (newMap, newList++eList)
+  else do
+    let newMap  = M.insert commit (commitNode key commit author date Nothing) nMap
+    buildListnMap r ls (key+1) (newMap, newList++eList)
+  
+  
+    {-where (commit,author,date,parents) = parseLog l--P.head $ P.take 1 $ B.words l
+          newMap  = M.insert commit (commitNode key commit author date Nothing) nMap --parents = P.drop 1 $ B.words l
+          newList = P.map (\parent -> ((fst $ fromJust $ M.lookup parent nMap),key,())) parents
+          --update merge details as well -}
+
+toNodeList :: Map CommitHash CommitNode -> [CommitNode]
+toNodeList m = P.map snd (M.toList m)  
+
+dateFormat = "%F"
+
+parseLog :: ByteString -> (CommitHash, ByteString, DateTime, [CommitHash])
+parseLog s = case B.split '|' s of
+    c:p:a:d:[] -> (c,a,fromJust $ parseDateTime dateFormat (B.unpack d),B.words p)
+    otherwise  -> error ("commit log parsing error: "++ show s) 
+
+commitNode :: Node -> CommitHash -> ByteString -> DateTime -> Maybe Merge -> CommitNode
+commitNode n c a d m = (n, Commit c a d m)
+
+--TODO get conflicted files of the merge nodes
+getMergeNodes :: GitDag -> [CommitNode]
+getMergeNodes g = P.filter (\n -> let (p,_,_,_) = context g (fst n) in moreThanTwo p ) (labNodes g)
+  where moreThanTwo []  = False
+        moreThanTwo [x] = False
+        moreThanTwo _   = True
+        
+
+
+
+
+
+
 
 --Algorithm to encode
 --1. Start with the root
