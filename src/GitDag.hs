@@ -15,6 +15,7 @@ import Data.ByteString.Char8 as B hiding (map, filter, head, drop, zip)
 import Data.Text as T
 import Data.Maybe
 import Data.DateTime
+import Text.Printf
 
 type CommitHash = ByteString
 
@@ -23,7 +24,7 @@ data Commit = Commit{
     author :: ByteString,
     date :: DateTime,
     mergeCommit :: Maybe Merge}
-      deriving(Show)
+      deriving(Show, Eq, Ord)
 --First parent is the branch on which othee branch was merged to.
 --Knowing the first parent helps to identify which chain of ancestors
 --to climb through in order to get to the lca otherwise the inner branches
@@ -32,7 +33,7 @@ data Merge = Merge {
     lca :: CommitHash,
     firstParent :: CommitHash,
     conflictedFiles :: [FilePath]}
-      deriving(Show)
+      deriving(Show, Eq, Ord)
 
 type GitDag = Gr Commit ()
 type CommitNode = LNode Commit
@@ -48,7 +49,9 @@ getDag :: Repo -> Branch -> IO GitDag
 getDag r b = do 
   runGitCmd r (gitCheckout b)
   log <- runGitCmd r gitlogP
-  gitDAG r log
+  dag <- gitDAG r log
+  printf "Dag for the repo %s created \n" r
+  return dag
 
 runGitCmd :: FilePath -> GitCtx a -> IO a
 runGitCmd repo command = runGit (makeConfig repo (Just "/usr/bin/git")) command
@@ -56,11 +59,21 @@ runGitCmd repo command = runGit (makeConfig repo (Just "/usr/bin/git")) command
 commitContext :: GitDag -> Node -> Context Commit ()
 commitContext = G.context
 
-children :: GitDag -> Int -> [CommitNode]
-children g n =  [(n',fromJust (lab g n' ))| n' <- ns, isJust (lab g n' ) ]
+children :: GitDag -> Int -> [Context Commit ()]
+children g n =  [G.context g n'| n' <- ns, isJust (lab g n' ) ]
     where 
       ns = suc g n
       
+parent :: GitDag -> Int -> [CommitNode]
+parent g n = [(n', fromJust $ lab g n')| n' <- ns, isJust (lab g n' ) ]
+    where 
+      ns = pre g n
+      
+fParent :: GitDag -> Int -> Maybe CommitNode
+fParent dag n = case lab dag n of
+  Just (Commit id a d Nothing)   -> maybe Nothing (Just.(P.head)) (maybeParent dag n)
+  Just (Commit id a d (Just m))  -> Just $ matchCommitId (firstParent m) (parent dag n)
+  Nothing                        -> error ("CommitNode undefined: "++show n)
 
 --mkGraph instance of fgl fails if the source node is not present
 gitDAG :: Repo -> GitLog -> IO GitDag
@@ -85,13 +98,13 @@ gitlogP = do
    o <- gitExec "log" ["--pretty=format:%h|%p|%an|%cd", "--date=short", "--reverse"] []
    result "log" o
 
-gitDiffTreeRoot :: CommitHash -> GitCtx GitLog
+{-gitDiffTreeRoot :: CommitHash -> GitCtx GitLog
 gitDiffTreeRoot commit = do
     o <- gitExec "diff-tree" 
       ["--no-commit-id", "--name-only", "-r", "--root", B.unpack commit] []
     case o of
       Right out -> return $ B.lines (B.pack out)
-      Left err  -> gitError err "Error while running git diff-tree --root"
+      Left err  -> gitError err "Error while running git diff-tree --root"-}
       
 gitDiffTree :: CommitNode -> GitCtx GitLog
 gitDiffTree (n,c) = do
@@ -114,7 +127,7 @@ gitMergeBase xs  = do
 --for octopus merge to work there should be any conflict. So no need to check that      
 gitConflictCheck :: CommitHash -> GitCtx [FilePath]
 gitConflictCheck c = do
-    o <- gitExec "merge" [B.unpack c, "--no-commit"] []
+    o <- gitExec "-c" ["user.email='deepthi.s.kumar8@gmail.com'", "-c",  "user.name='Deepthi S Kumar'","merge", B.unpack c, "--no-commit"] []
     case o of
        Right out -> return []
        Left err  -> trace (show err) getConflictedFiles --(return $ parseConflictLog msg)
@@ -123,7 +136,7 @@ getConflictedFiles :: GitCtx [FilePath]
 getConflictedFiles = do
    o <- gitExec "diff" ["--name-only", "--diff-filter=U"] []
    case o of
-     Right out -> gitAbort >> (return $ P.lines out)
+     Right out -> (return $ P.lines out)
      Left err  -> gitError err ("Error while running git diff --name-only --diff-filter=U")
      
 gitAbort :: GitCtx ()
@@ -155,7 +168,7 @@ buildListnMap r (l:ls) key (nMap, eList) = do
     runGitCmd r (gitCheckout (B.unpack $ P.head parents))
     lca <- runGitCmd r (gitMergeBase parents)
     files <- runGitCmd r (gitConflictCheck (P.head $ P.tail parents))
-    --runGitCmd r (gitAbort)
+    runGitCmd r (gitAbort)
     let merge = Just (Merge lca (P.head parents) files)
     let newMap  = M.insert commit (commitNode key commit author date merge) nMap
     buildListnMap r ls (key+1) (newMap, newList++eList)
@@ -191,8 +204,16 @@ getMergeNodes g = P.filter (\n -> let (p,_,_,_) = context g (fst n) in moreThanT
         
 
 
+maybeParent :: GitDag -> Int -> Maybe [CommitNode]
+maybeParent dag n = case parent dag n of
+  [] -> Nothing
+  xs -> Just xs 
 
-
+matchCommitId :: CommitHash -> [CommitNode] -> CommitNode
+matchCommitId c [] = error ("No commit nodes to match "++ B.unpack c)
+matchCommitId c (p@(_,(Commit c' _ _ _)):ps) 
+   |c == c'  = p
+   |otherwise  = matchCommitId c ps
 
 
 
