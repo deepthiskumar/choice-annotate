@@ -20,11 +20,11 @@ import Control.Monad (foldM)
 {-
 1. get merge base and check if merge has conflicts --Done
  Check sending git executable location. Add a global git config file. Done: Added email and name in the command itself
-2. update selections
-3. traverse the dag and encode. --Going on: Debug the state values in encode
-
-4. for now merge simply (no conflict => serialize, conflict => branch(even if ours or theirs))
-5. then check complex merges
+2. traverse the dag and encode. Done
+3. Standalone merges. Done (CC Merge)
+4. use ccmerge and merge selections (simple) 
+5. for now merge simply (no conflict => serialize, conflict => branch(even if ours or theirs))
+6. then check complex merges (check patch in ccMerge)
 -}
 
 type FileMap = Map FilePath (Selection, VString)
@@ -59,12 +59,30 @@ encodeRepo repo dag = do
   
 encodeCommits :: FilePath -> GitDag -> Context Commit () -> SelState ()
 encodeCommits repo dag c@(parents,id,commit,children) = do
-    fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
-    liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
-    mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
-    foldM (\_ ctxt -> encodeCommits repo dag ctxt) () (G.children dag id)
-   
+    continue <- manageCommit repo dag c
+    if not continue then return ()
+    else do
+      foldM (\_ ctxt -> encodeCommits repo dag ctxt) () (G.children dag id)
+      --st <- get
+      --liftIO $ print (show st)
 
+manageCommit :: FilePath -> GitDag -> Context Commit () -> SelState Bool
+manageCommit repo dag c@(parents,id,commit,children) 
+    | isMergeCommit commit = StateT (\s -> do 
+        if allParentsEncoded dag parents s then 
+          do {liftIO $ print ("Merge commit: "++ show commit); return (True,s)}--merge commits
+        else do {liftIO $ print ("Merge commit (Incomplete) : "++ show commit); return (False,s)})
+    | otherwise            = do
+      liftIO $ print ("Non-merge commit : "++ show commit)
+      fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
+      liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
+      mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
+      return True
+   
+allParentsEncoded :: GitDag -> Adj () -> RepoInfoMap -> Bool
+allParentsEncoded dag ps m = P.and [M.member (commitNode dag p) m | ((),p) <- ps]
+  
+  
 
 --foldM :: (Foldable t, Monad m) => (b -> a -> m b) -> b -> t a -> m b
 
@@ -85,7 +103,7 @@ encodeCommits repo dag c@(parents,id,commit,children) = do
 ccEncode :: GitDag -> FilePath -> CommitNode -> [CommitNode] -> FilePath -> SelState ()
 ccEncode dag repo cnode@(dim,commit) parents f  = do
    StateT $ (\s ->  do
-    print (show s) 
+    --print (show s) 
     let file = (repo ++ "/" ++ f)
     print ("In ccTrack block :" ++ file)
     exists <- doesFileExist file

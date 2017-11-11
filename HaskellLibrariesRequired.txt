@@ -37,6 +37,10 @@ hp2ps -d CCTrack.hp
 to uninstall a package 
 sudo ghc-pkg unregister --force vector
 
+--
+ghc -prof -fprof-auto -rtsopts -O2 -v GitEncode.hs
+
+./GitEncode "/home/eecs/Documents/gitRepos/test1" master +RTS -hc -L100
 
 -------------------------------------------------------------------------------------------------------------------------------
 cabal upgrade

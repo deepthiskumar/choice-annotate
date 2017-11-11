@@ -170,10 +170,10 @@ buildListnMap r (l:ls) key (nMap, eList) = do
     files <- runGitCmd r (gitConflictCheck (P.head $ P.tail parents))
     runGitCmd r (gitAbort)
     let merge = Just (Merge lca (P.head parents) files)
-    let newMap  = M.insert commit (commitNode key commit author date merge) nMap
+    let newMap  = M.insert commit (newCommitNode key commit author date merge) nMap
     buildListnMap r ls (key+1) (newMap, newList++eList)
   else do
-    let newMap  = M.insert commit (commitNode key commit author date Nothing) nMap
+    let newMap  = M.insert commit (newCommitNode key commit author date Nothing) nMap
     buildListnMap r ls (key+1) (newMap, newList++eList)
   
   
@@ -192,8 +192,8 @@ parseLog s = case B.split '|' s of
     c:p:a:d:[] -> (c,a,fromJust $ parseDateTime dateFormat (B.unpack d),B.words p)
     otherwise  -> error ("commit log parsing error: "++ show s) 
 
-commitNode :: Node -> CommitHash -> ByteString -> DateTime -> Maybe Merge -> CommitNode
-commitNode n c a d m = (n, Commit c a d m)
+newCommitNode :: Node -> CommitHash -> ByteString -> DateTime -> Maybe Merge -> CommitNode
+newCommitNode n c a d m = (n, Commit c a d m)
 
 --TODO get conflicted files of the merge nodes
 getMergeNodes :: GitDag -> [CommitNode]
@@ -215,7 +215,14 @@ matchCommitId c (p@(_,(Commit c' _ _ _)):ps)
    |c == c'  = p
    |otherwise  = matchCommitId c ps
 
+isMergeCommit :: Commit -> Bool
+isMergeCommit (Commit _ _ _ (Just _)) = True
+isMergeCommit _                       = False
 
+commitNode :: GitDag -> Node ->  CommitNode
+commitNode dag n = case lab dag n of
+    Just l   -> (n,l)
+    Nothing  -> error ("Commit node not found for node id:" ++ show n)
 
 --Algorithm to encode
 --1. Start with the root
