@@ -104,12 +104,12 @@ mergeAllFiles repo mcommit dag ((f,[c]):ms) = do --simply find the latest VS and
    let sel = lookUpSel dag (nodeFromHash dag c) f s
    put $ updateSel mcommit f sel s
    let target = (repo ++ "/" ++ f++".v")
-   liftIO $ Exc.catch ( writeFile target $ (T.pack $ showVText (snd sel))) writeHandler
+   liftIO $ writeVFile target sel--Exc.catch ( writeFile target $ (T.pack $ showVText (snd sel))) writeHandler
    mergeAllFiles repo mcommit dag ms
 mergeAllFiles repo mcommit dag ((f,cs):ms)  = do --need to be merged
    newSel <- mergeFile mcommit dag (f,cs)
    let target = (repo ++ "/" ++ f++".v")
-   liftIO $ Exc.catch ( writeFile target $ (T.pack $ showVText (snd newSel))) writeHandler
+   liftIO $ writeVFile target newSel--Exc.catch ( writeFile target $ (T.pack $ showVText (snd newSel))) writeHandler
    mergeAllFiles repo mcommit dag ms
    
 mergeConflictedFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
@@ -156,7 +156,7 @@ ccEncodeFiles dag repo cnode parents (f:fs) = do
   
 ccEncode :: GitDag -> FilePath -> CommitNode -> [CommitNode] -> FilePath -> SelState ()
 ccEncode dag repo cnode@(dim,commit) parents f  = do
-   StateT $!! (\s ->  do
+   StateT (\s ->  do
     --print (show s) 
     let file = (repo ++ "/" ++ f)
     print ("In ccTrack block :" ++ file)
@@ -197,7 +197,7 @@ ccEncode dag repo cnode@(dim,commit) parents f  = do
                 --print vtext
                 let (sel,vs) = lookUpSel dag cnode f s--(P.head parents) f s
                 let dtext = distill (dim) vs sel{-(latest vtext)-} (stripNewline source)
-                Exc.catch ( writeFile target $ (T.pack $ showVText dtext)) writeHandler
+                writeVFile target ([],dtext) --Exc.catch ( writeFile target $ (T.pack $ showVText dtext)) writeHandler
                 {-cont <- readFile target
                 I.putStrLn (T.pack (show dim++": "))
                 I.putStrLn cont-}
