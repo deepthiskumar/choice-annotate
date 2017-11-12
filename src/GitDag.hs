@@ -32,6 +32,7 @@ data Commit = Commit{
 data Merge = Merge {
     lca :: CommitHash,
     firstParent :: CommitHash,
+    changedFiles :: [(CommitHash,[FilePath])], --from each parent
     conflictedFiles :: [FilePath]}
       deriving(Show, Eq, Ord)
 
@@ -145,6 +146,15 @@ gitAbort = do
    case o of
       Right out -> return ()
       Left err  -> gitError err ("Error while running git merge --abort")
+
+gitCommitDiff :: CommitHash -> [CommitHash] -> GitCtx [(CommitHash,[FilePath])]
+gitCommitDiff lca []      = return []    
+gitCommitDiff lca (p:ps)  = do
+  o <- gitExec "diff" ["--name-only", ((B.unpack lca) ++ "..."++ (B.unpack p) )] []
+  case o of
+    Right out -> do {xs <- gitCommitDiff lca ps; return ((p, P.lines out):xs)}
+    Left err -> gitError err ("Error while running git diff --name-only " 
+      ++ (B.unpack lca) ++ "..." ++ (B.unpack p))
     
 result :: String -> Either GitFailure String -> GitCtx GitLog
 result command o = do
@@ -167,9 +177,10 @@ buildListnMap r (l:ls) key (nMap, eList) = do
   if P.length parents > 1 then do
     runGitCmd r (gitCheckout (B.unpack $ P.head parents))
     lca <- runGitCmd r (gitMergeBase parents)
+    modFiles <- runGitCmd r (gitCommitDiff lca parents)
     files <- runGitCmd r (gitConflictCheck (P.head $ P.tail parents))
     runGitCmd r (gitAbort)
-    let merge = Just (Merge lca (P.head parents) files)
+    let merge = Just (Merge lca (P.head parents) modFiles files)
     let newMap  = M.insert commit (newCommitNode key commit author date merge) nMap
     buildListnMap r ls (key+1) (newMap, newList++eList)
   else do
@@ -223,6 +234,16 @@ commitNode :: GitDag -> Node ->  CommitNode
 commitNode dag n = case lab dag n of
     Just l   -> (n,l)
     Nothing  -> error ("Commit node not found for node id:" ++ show n)
+    
+nodeFromHash :: GitDag -> CommitHash -> CommitNode
+nodeFromHash dag c = findC c (labNodes dag)
+
+
+findC :: CommitHash -> [CommitNode] -> CommitNode
+findC c [] = error ("Commit node not found for commit id:" ++ show c)
+findC c (n@(i,(Commit h _ _ _)):ns) 
+      | c == h    = n
+      | otherwise = findC c ns
 
 --Algorithm to encode
 --1. Start with the root

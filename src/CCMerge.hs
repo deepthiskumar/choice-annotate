@@ -322,6 +322,9 @@ mergeCCNew :: Int -> DimVText -> DimVText -> DimVText
 mergeCCNew cd (vs,d) (vs',d') = let rs'= unifyVText $ mergeVText (vSplit vs) (vSplit vs')
                                 in (rs', max d d')
                                 
+mergeVS :: (Selection,VString) -> (Selection,VString) -> (Selection,VString)
+mergeVS (s,vs) (s',vs') = (s `union` s', unifyVText $ mergeVText (vSplit vs) (vSplit vs'))
+                                
                                 --TODO
                                 --CHNGE SPLIT TO TOKENIZE
                                 -- AND THEN GENERALIZE THIS

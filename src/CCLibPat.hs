@@ -30,7 +30,7 @@ module CCLibPat where
 
   escape = "ⱺ"
 
-  data Sel = LSel !Dim | RSel !Dim  deriving(Generic, NFData)
+  data Sel = LSel !Dim | RSel !Dim  deriving(Eq, Generic, NFData)
   type Selection = [Sel]
 
   data Alt = L | R deriving Eq

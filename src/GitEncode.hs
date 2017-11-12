@@ -1,6 +1,7 @@
 --module GitEncode where
 
-import Prelude as P
+import Prelude as P --hiding (readFile)
+--import System.IO.Strict (readFile)
 import GitDag as G
 import CCLibPat
 import System.Environment (getArgs)
@@ -9,12 +10,14 @@ import Text.Printf (printf)
 import Control.Exception as Exc
 import System.Directory (doesFileExist)
 import Data.ByteString.Char8 as B hiding (putStrLn, writeFile, readFile)
-import Data.Map as M
+import Data.Map as M hiding ((\\))
 import Data.Graph.Inductive.Graph
 import Control.Monad.Trans.State
 import Data.Maybe
 import Control.Monad.IO.Class
 import Control.Monad (foldM)
+import CCMerge
+import Data.List as L
 
 --TODO
 {-
@@ -42,21 +45,10 @@ main = do
     --now for each commit, encode all the files in it
     let ctxt = commitContext dag 0
     execStateT (encodeCommits repo dag ctxt) M.empty
-    
+    runGitCmd repo (gitCheckout branch)
+    print "Finished Encoding"
 
-{-encodeCommits :: FilePath -> GitDag -> CommitNode -> IO ()--(VString,Selection)
-encodeCommits repo dag commit = do
-  fileList <- runGitCmd repo (gitDiffTree commit)
-  mapM (ccEncode repo (fst commit)) (P.map B.unpack fileList)
-  mapM (encodeCommits repo dag) (children dag (fst commit))
-  return ()
-  -}
-{-encodeRepo :: FilePath ->  GitDag -> IO ()
-encodeRepo repo dag = do
-  --get the root commit and start from there
-  let (parents,id,commit,children) = commitContext dag 0
-  encodeCommits repo (id,commit)-}
-  
+ 
 encodeCommits :: FilePath -> GitDag -> Context Commit () -> SelState ()
 encodeCommits repo dag c@(parents,id,commit,children) = do
     continue <- manageCommit repo dag c
@@ -68,12 +60,19 @@ encodeCommits repo dag c@(parents,id,commit,children) = do
 
 manageCommit :: FilePath -> GitDag -> Context Commit () -> SelState Bool
 manageCommit repo dag c@(parents,id,commit,children) 
-    | isMergeCommit commit = StateT (\s -> do 
+    | isMergeCommit commit = do
+        s <- get 
         if allParentsEncoded dag parents s then 
-          do {liftIO $ print ("Merge commit: "++ show commit); return (True,s)}--merge commits
-        else do {liftIO $ print ("Merge commit (Incomplete) : "++ show commit); return (False,s)})
+          do 
+             liftIO $ print ("Merge commit: "++ show (id,commit));
+             liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit)) 
+             mergeCommitFiles dag c--merge commits
+             return True
+        else do
+          liftIO $ print ("Merge commit (Incomplete) : "++ show (id,commit))
+          return False
     | otherwise            = do
-      liftIO $ print ("Non-merge commit : "++ show commit)
+      liftIO $ print ("Non-merge commit : "++ show (id,commit))
       fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
       liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
       mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
@@ -82,23 +81,63 @@ manageCommit repo dag c@(parents,id,commit,children)
 allParentsEncoded :: GitDag -> Adj () -> RepoInfoMap -> Bool
 allParentsEncoded dag ps m = P.and [M.member (commitNode dag p) m | ((),p) <- ps]
   
-  
+mergeCommitFiles :: GitDag -> Context Commit () -> SelState ()
+mergeCommitFiles dag c@(parents,id,com@(Commit h a d (Just m)),children) = do
+    --get the changed files in each of the parent
+    let cf = changedFiles m
+    let fc = M.toList $ tobeMerged cf M.empty
+    let rem = L.filter (\(f,_)-> f `L.notElem` (conflictedFiles m)) fc
+    let conf = L.filter (\(f,_)-> f `L.elem` (conflictedFiles m)) fc
+    mergeAllFiles (id,com) dag rem
+    mergeConflictedFiles (id, com) dag conf
+      
 
---foldM :: (Foldable t, Monad m) => (b -> a -> m b) -> b -> t a -> m b
+mergeAllFiles :: CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState ()
+mergeAllFiles _ _ []                   = return ()
+mergeAllFiles mcommit dag ((f,[c]):ms) = do --simply find the latest VS and add it to the state 
+   s <- get
+   let sel = lookUpSel dag (nodeFromHash dag c) f s
+   put $ updateSel mcommit f sel s
+   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd sel)) writeHandler
+   mergeAllFiles mcommit dag ms
+mergeAllFiles mcommit dag ((f,cs):ms)  = do --need to be merged
+   newSel <- mergeFile mcommit dag (f,cs)
+   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd newSel)) writeHandler
+   mergeAllFiles mcommit dag ms
+   
+mergeConflictedFiles :: CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
+mergeConflictedFiles _ _ []                   = return ()
+mergeConflictedFiles mcommit dag ((f,cs):ms)  = do
+   newSel <- mergeFile mcommit dag (f,cs)
+   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd newSel)) writeHandler
+   mergeConflictedFiles mcommit dag ms
+   
+mergeFile :: CommitNode -> GitDag -> (FilePath,[CommitHash]) -> SelState (Selection, VString)
+mergeFile mcommit dag (f,cs)  = do
+   s <- get
+   --get first parent
+   let fpt = firstParent $ (fromJust $ mergeCommit $ snd mcommit)
+   let sel = latestVS dag (f, cs \\ [fpt]) s
+   --get commit from firstParent branch for f
+   let p = lookUpSel dag (nodeFromHash dag fpt) f s
+   --foldr
+   let newSel = P.foldr (mergeVS) p sel
+   put $ updateSel mcommit f newSel s
+   return newSel   
+   
+latestVS :: GitDag -> (FilePath,[CommitHash]) -> RepoInfoMap -> [(Selection, VString)]
+latestVS _ (f,[]) _     = []
+latestVS dag (f,c:cs) m = (lookUpSel dag (nodeFromHash dag c) f m) :
+          (latestVS dag (f,cs) m)
+   
+tobeMerged :: [(CommitHash,[FilePath])] -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
+tobeMerged [] m      = m
+tobeMerged (c:cfs) m = tobeMerged cfs (updateCommits c m)
 
-{-do
-  fileList <- runGitCmd repo (gitDiffTree (id, commit))
-  case parents of
-    []  -> mapM (ccEncode repo id sel) (P.map B.unpack fileList)
-    [x] -> mapM (ccEncode repo id (RSel id : sel)) (P.map B.unpack fileList)
-    xs ->mapM (ccEncode repo (fst commit)) (P.map B.unpack (fileList \\ conflictedFiles $ mergeCommit $ commit)) 
-    --merge the parents of conflictedFiles and then compare with the merge commit files
-  return ()-}
-    
---Use state monad to update the map. Seelction needs to be for each file.
-    
-  
 
+updateCommits :: (CommitHash,[FilePath]) -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
+updateCommits (c,[]) m   = m
+updateCommits (c,f:fs) m = updateCommits (c,fs) (M.alter (\val -> Just ( c:(fromMaybe [] val))) f m)
   
 ccEncode :: GitDag -> FilePath -> CommitNode -> [CommitNode] -> FilePath -> SelState ()
 ccEncode dag repo cnode@(dim,commit) parents f  = do
@@ -146,17 +185,22 @@ ccEncode dag repo cnode@(dim,commit) parents f  = do
                 --print ("vtext from env: "++ show vs)
                 let dtext = distill (dim) vs sel{-(latest vtext)-} (T.pack $ stripNewline source)
                 Exc.catch ( writeFile target $ showVText dtext) writeHandler
-                
                 return $ ((),updateSel cnode f ((RSel dim):sel,dtext) s) 
                 
            )   
 
-             
+
 lookUpSel :: GitDag -> CommitNode -> FilePath -> RepoInfoMap -> (Selection, VString)
-lookUpSel dag cnode f m = 
+lookUpSel dag cnode f m =
+   case lookup' cnode f m of
+      ([],[]) -> lookUpParentSel dag cnode f m
+      xs      -> xs
+             
+lookUpParentSel :: GitDag -> CommitNode -> FilePath -> RepoInfoMap -> (Selection, VString)
+lookUpParentSel dag cnode f m = 
    case fParent dag (fst cnode) of
      Just p  -> case lookup' p f m of
-                  ([],[]) ->lookUpSel dag p f m
+                  ([],[]) ->lookUpParentSel dag p f m
                   xs -> xs 
      Nothing -> ([],[])
 
