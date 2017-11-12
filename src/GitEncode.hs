@@ -1,7 +1,7 @@
 --module GitEncode where
 
-import Prelude as P --hiding (readFile)
---import System.IO.Strict (readFile)
+import Prelude as P hiding (readFile, writeFile)
+import Data.Text.IO as I
 import GitDag as G
 import CCLibPat
 import System.Environment (getArgs)
@@ -47,6 +47,10 @@ main = do
     execStateT (encodeCommits repo dag ctxt) M.empty
     runGitCmd repo (gitCheckout branch)
     print "Finished Encoding"
+    {-cont <- readFile "list.txt.v"
+    I.putStrLn cont
+    again <- readFile "list.txt.v"
+    I.putStrLn again-}
 
  
 encodeCommits :: FilePath -> GitDag -> Context Commit () -> SelState ()
@@ -62,55 +66,59 @@ manageCommit :: FilePath -> GitDag -> Context Commit () -> SelState Bool
 manageCommit repo dag c@(parents,id,commit,children) 
     | isMergeCommit commit = do
         s <- get 
-        if allParentsEncoded dag parents s then 
-          do 
-             liftIO $ print ("Merge commit: "++ show (id,commit));
-             liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit)) 
-             mergeCommitFiles dag c--merge commits
-             return True
+        if allParentsEncoded dag parents s then do 
+          liftIO $ print ("Merge commit: "++ show (id,commit));
+          liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit)) 
+          mergeCommitFiles repo dag c--merge commits
+          return True
         else do
           liftIO $ print ("Merge commit (Incomplete) : "++ show (id,commit))
           return False
     | otherwise            = do
-      liftIO $ print ("Non-merge commit : "++ show (id,commit))
-      fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
-      liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
-      mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
-      return True
+        liftIO $ print ("Non-merge commit : "++ show (id,commit))
+        fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
+        liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
+        mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
+        --x <- ccEncodeFiles dag repo (id,commit) (parent dag id) (P.map B.unpack fileList)
+        --liftIO $ P.print x
+        return True
    
 allParentsEncoded :: GitDag -> Adj () -> RepoInfoMap -> Bool
 allParentsEncoded dag ps m = P.and [M.member (commitNode dag p) m | ((),p) <- ps]
   
-mergeCommitFiles :: GitDag -> Context Commit () -> SelState ()
-mergeCommitFiles dag c@(parents,id,com@(Commit h a d (Just m)),children) = do
+mergeCommitFiles :: FilePath -> GitDag -> Context Commit () -> SelState ()
+mergeCommitFiles repo dag c@(parents,id,com@(Commit h a d (Just m)),children) = do
     --get the changed files in each of the parent
     let cf = changedFiles m
     let fc = M.toList $ tobeMerged cf M.empty
     let rem = L.filter (\(f,_)-> f `L.notElem` (conflictedFiles m)) fc
     let conf = L.filter (\(f,_)-> f `L.elem` (conflictedFiles m)) fc
-    mergeAllFiles (id,com) dag rem
-    mergeConflictedFiles (id, com) dag conf
+    mergeAllFiles repo (id,com) dag rem
+    mergeConflictedFiles repo (id, com) dag conf
       
 
-mergeAllFiles :: CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState ()
-mergeAllFiles _ _ []                   = return ()
-mergeAllFiles mcommit dag ((f,[c]):ms) = do --simply find the latest VS and add it to the state 
+mergeAllFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState ()
+mergeAllFiles _ _ _ []                      = return ()
+mergeAllFiles repo mcommit dag ((f,[c]):ms) = do --simply find the latest VS and add it to the state 
    s <- get
    let sel = lookUpSel dag (nodeFromHash dag c) f s
    put $ updateSel mcommit f sel s
-   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd sel)) writeHandler
-   mergeAllFiles mcommit dag ms
-mergeAllFiles mcommit dag ((f,cs):ms)  = do --need to be merged
+   let target = (repo ++ "/" ++ f++".v")
+   liftIO $ Exc.catch ( writeFile target $ (T.pack $ showVText (snd sel))) writeHandler
+   mergeAllFiles repo mcommit dag ms
+mergeAllFiles repo mcommit dag ((f,cs):ms)  = do --need to be merged
    newSel <- mergeFile mcommit dag (f,cs)
-   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd newSel)) writeHandler
-   mergeAllFiles mcommit dag ms
+   let target = (repo ++ "/" ++ f++".v")
+   liftIO $ Exc.catch ( writeFile target $ (T.pack $ showVText (snd newSel))) writeHandler
+   mergeAllFiles repo mcommit dag ms
    
-mergeConflictedFiles :: CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
-mergeConflictedFiles _ _ []                   = return ()
-mergeConflictedFiles mcommit dag ((f,cs):ms)  = do
+mergeConflictedFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
+mergeConflictedFiles _ _ _ []                   = return ()
+mergeConflictedFiles repo mcommit dag ((f,cs):ms)  = do
    newSel <- mergeFile mcommit dag (f,cs)
-   liftIO $ Exc.catch ( writeFile (f++".v") $ showVText (snd newSel)) writeHandler
-   mergeConflictedFiles mcommit dag ms
+   let target = (repo ++ "/" ++ f++".v")
+   liftIO $ Exc.catch ( writeFile target $ (T.pack $ showVText (snd newSel))) writeHandler
+   mergeConflictedFiles repo mcommit dag ms
    
 mergeFile :: CommitNode -> GitDag -> (FilePath,[CommitHash]) -> SelState (Selection, VString)
 mergeFile mcommit dag (f,cs)  = do
@@ -138,10 +146,17 @@ tobeMerged (c:cfs) m = tobeMerged cfs (updateCommits c m)
 updateCommits :: (CommitHash,[FilePath]) -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
 updateCommits (c,[]) m   = m
 updateCommits (c,f:fs) m = updateCommits (c,fs) (M.alter (\val -> Just ( c:(fromMaybe [] val))) f m)
+
+
+ccEncodeFiles :: GitDag -> FilePath -> CommitNode -> [CommitNode] ->[FilePath] -> SelState ()
+ccEncodeFiles _ _ _ _ []                    = return ()
+ccEncodeFiles dag repo cnode parents (f:fs) = do
+   ccEncode dag repo cnode parents f
+   ccEncodeFiles dag repo cnode parents fs
   
 ccEncode :: GitDag -> FilePath -> CommitNode -> [CommitNode] -> FilePath -> SelState ()
 ccEncode dag repo cnode@(dim,commit) parents f  = do
-   StateT $ (\s ->  do
+   StateT $!! (\s ->  do
     --print (show s) 
     let file = (repo ++ "/" ++ f)
     print ("In ccTrack block :" ++ file)
@@ -153,11 +168,11 @@ ccEncode dag repo cnode@(dim,commit) parents f  = do
          print $ "Source " ++ file ++ " doesnt exist"
          return ((),s)
     else do
-         source1 <- try (readFile file) :: IO (Either SomeException (String))
+         source1 <- try (readFile file) :: IO (Either SomeException (Text))
          --source <- S.readFile file
          case source1 of
             Left ex -> do 
-                 putStrLn $ "Caught exception while reading the source file: " ++ show ex
+                 P.putStrLn $ "Caught exception while reading the source file: " ++ show ex
                  return ((),s)
             Right source -> do
               if not vexists 
@@ -165,30 +180,34 @@ ccEncode dag repo cnode@(dim,commit) parents f  = do
                    result <- try (writeFile target source  ) :: IO (Either SomeException ())
                    case result of
                       Left ex  -> do 
-                        putStrLn $ "Caught exception while writing the file " ++ file ++ " - "++ show ex
+                        P.putStrLn $ "Caught exception while writing the file " ++ file ++ " - "++ show ex
                         return ((),s)
                       Right val -> do 
-                        return ((),updateSel cnode f ([],[Str $ T.pack $ stripNewline source]) s) 
+                        return ((),updateSel cnode f ([],[Str $ stripNewline source]) s) 
 
               -- Incorporate into the log file.
               else do
-                vsource <- readFile target
-                let e_vtext = ccParser (stripNewline vsource)
+                --vsource <- readFile target
+                --let e_vtext = ccParser (T.unpack $ stripNewline vsource)
                 --print ("vtext from file: "++ show e_vtext)
-                let v_parsed = case e_vtext of { Left _ -> False; Right _ -> True } 
+                --let v_parsed = case e_vtext of { Left _ -> False; Right _ -> True } 
       
-                errorIf (not v_parsed) $ "Failed to parse " ++ target
+                --errorIf (not v_parsed) $ "Failed to parse " ++ target
                 --let Right vtext = e_vtext
                 --print vtext
                 let (sel,vs) = lookUpSel dag cnode f s--(P.head parents) f s
-                --print ("Selection: "++ show sel)
-                --print ("vtext from env: "++ show vs)
-                let dtext = distill (dim) vs sel{-(latest vtext)-} (T.pack $ stripNewline source)
-                Exc.catch ( writeFile target $ showVText dtext) writeHandler
+                let dtext = distill (dim) vs sel{-(latest vtext)-} (stripNewline source)
+                Exc.catch ( writeFile target $ (T.pack $ showVText dtext)) writeHandler
+                {-cont <- readFile target
+                I.putStrLn (T.pack (show dim++": "))
+                I.putStrLn cont-}
                 return $ ((),updateSel cnode f ((RSel dim):sel,dtext) s) 
                 
            )   
 
+
+writeVFile :: FilePath -> (Selection,VString) -> IO ()
+writeVFile f (sel, vs) = Exc.catch ( writeFile (f++".v") $ (T.pack $ showVText vs)) writeHandler
 
 lookUpSel :: GitDag -> CommitNode -> FilePath -> RepoInfoMap -> (Selection, VString)
 lookUpSel dag cnode f m =
@@ -222,7 +241,7 @@ fileMap cnode f m = case M.lookup cnode m of
 
 writeHandler :: IOError -> IO ()
 writeHandler e = do 
-  putStrLn ("Something went wrong during write operation: " ++ show e)   
+  P.putStrLn ("Something went wrong during write operation: " ++ show e)   
   return ()
 
 nextDimensionS :: VString -> Int
@@ -230,11 +249,16 @@ nextDimensionS vt = case dimensions vt of
   [] -> 1
   ds -> (P.maximum ds) + 1
 
-stripNewline :: [Char] -> [Char]
+{-stripNewline :: [Char] -> [Char]
 stripNewline []                 = []
 stripNewline ('\n' :[])         = []
-stripNewline (x:xs)             = x : stripNewline xs
+stripNewline (x:xs)             = x : stripNewline xs-}
 
+stripNewline :: Text -> Text
+stripNewline s 
+  | T.null s          = s
+  | T.last s == '\n'  = T.init s
+  | otherwise         = s
 
 errorIf :: Bool -> String -> IO ()
 errorIf b m = if b then print m else return ()  
