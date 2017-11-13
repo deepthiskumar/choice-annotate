@@ -1,6 +1,6 @@
 --module GitEncode where
 
-import Prelude as P hiding (readFile, writeFile)
+import Prelude as P hiding (readFile, writeFile, appendFile)
 import Data.Text.IO as I
 import GitDag as G
 import CCLibPat
@@ -9,7 +9,7 @@ import Data.Text as T
 import Text.Printf (printf)
 import Control.Exception as Exc
 import System.Directory (doesFileExist)
-import Data.ByteString.Char8 as B hiding (putStrLn, writeFile, readFile)
+--import Data.ByteString.Char8 as B hiding (putStrLn, writeFile, readFile)
 import Data.Map as M hiding ((\\))
 import Data.Graph.Inductive.Graph
 import Control.Monad.Trans.State
@@ -61,7 +61,7 @@ manageCommit repo dag c@(parents,id,commit,children)
         s <- get 
         if allParentsEncoded dag parents s then do 
           liftIO $ print ("Merge commit: "++ show (id,commit));
-          liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit)) 
+          liftIO $ runGitCmd repo (gitCheckout (T.unpack $ commitID commit)) 
           mergeCommitFiles repo dag c--merge commits
           return True
         else do
@@ -70,8 +70,8 @@ manageCommit repo dag c@(parents,id,commit,children)
     | otherwise            = do
         liftIO $ print ("Non-merge commit : "++ show (id,commit))
         fileList <- liftIO $ runGitCmd repo (gitDiffTree (id, commit))
-        liftIO $ runGitCmd repo (gitCheckout (B.unpack $ commitID commit))
-        mapM (ccEncode dag repo (id,commit) (parent dag id) ) (P.map B.unpack fileList)
+        liftIO $ runGitCmd repo (gitCheckout (T.unpack $ commitID commit))
+        mapM (ccEncode dag repo (id,commit)) (P.map T.unpack fileList)
         return True
    
 allParentsEncoded :: GitDag -> Adj () -> RepoInfoMap -> Bool
@@ -81,7 +81,7 @@ mergeCommitFiles :: FilePath -> GitDag -> Context Commit () -> SelState ()
 mergeCommitFiles repo dag c@(parents,id,com@(Commit h a d (Just m)),children) = do
     --get the changed files in each of the parent
     let cf = changedFiles m
-    let fc = M.toList $ tobeMerged cf M.empty
+    let fc = M.toList $ comFilesToFileComs cf M.empty
     let rem = L.filter (\(f,_)-> f `L.notElem` (conflictedFiles m)) fc
     let conf = L.filter (\(f,_)-> f `L.elem` (conflictedFiles m)) fc
     mergeAllFiles repo (id,com) dag rem
@@ -90,25 +90,17 @@ mergeCommitFiles repo dag c@(parents,id,com@(Commit h a d (Just m)),children) = 
 
 mergeAllFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState ()
 mergeAllFiles _ _ _ []                      = return ()
-mergeAllFiles repo mcommit dag ((f,[c]):ms) = do --simply find the latest VS and add it to the state 
-   s <- get
-   let sel = lookUpSel dag (nodeFromHash dag c) f s
-   put $ updateSel mcommit f sel s
-   let target = (repo ++ "/" ++ f)
-   liftIO $ writeVFile target sel
-   mergeAllFiles repo mcommit dag ms
 mergeAllFiles repo mcommit dag ((f,cs):ms)  = do --need to be merged
    newSel <- mergeFile mcommit dag (f,cs)
-   let target = (repo ++ "/" ++ f)
-   liftIO $ writeVFile target newSel
+   liftIO $ writeVFile (repo ++ "/" ++ f) mcommit newSel
    mergeAllFiles repo mcommit dag ms
    
 mergeConflictedFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
 mergeConflictedFiles _ _ _ []                   = return ()
 mergeConflictedFiles repo mcommit dag ((f,cs):ms)  = do
    newSel <- mergeFile mcommit dag (f,cs)
-   let target = (repo ++ "/" ++ f)
-   liftIO $ writeVFile target newSel
+   liftIO $ runGitCmd repo (gitCheckout (T.unpack $ commitID $ snd mcommit))
+   ccEncode dag repo mcommit f
    mergeConflictedFiles repo mcommit dag ms
    
 mergeFile :: CommitNode -> GitDag -> (FilePath,[CommitHash]) -> SelState (Selection, VString)
@@ -129,24 +121,18 @@ latestVS _ (f,[]) _     = []
 latestVS dag (f,c:cs) m = (lookUpSel dag (nodeFromHash dag c) f m) :
           (latestVS dag (f,cs) m)
    
-tobeMerged :: [(CommitHash,[FilePath])] -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
-tobeMerged [] m      = m
-tobeMerged (c:cfs) m = tobeMerged cfs (updateCommits c m)
+comFilesToFileComs :: [(CommitHash,[FilePath])] -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
+comFilesToFileComs [] m      = m
+comFilesToFileComs (c:cfs) m = comFilesToFileComs cfs (updateFCMap c m)
 
 
-updateCommits :: (CommitHash,[FilePath]) -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
-updateCommits (c,[]) m   = m
-updateCommits (c,f:fs) m = updateCommits (c,fs) (M.alter (\val -> Just ( c:(fromMaybe [] val))) f m)
+updateFCMap :: (CommitHash,[FilePath]) -> Map FilePath [CommitHash] -> Map FilePath [CommitHash]
+updateFCMap (c,[]) m   = m
+updateFCMap (c,f:fs) m = updateFCMap (c,fs) (M.alter (\val -> Just ( c:(fromMaybe [] val))) f m)
 
-
-ccEncodeFiles :: GitDag -> FilePath -> CommitNode -> [CommitNode] ->[FilePath] -> SelState ()
-ccEncodeFiles _ _ _ _ []                    = return ()
-ccEncodeFiles dag repo cnode parents (f:fs) = do
-   ccEncode dag repo cnode parents f
-   ccEncodeFiles dag repo cnode parents fs
   
-ccEncode :: GitDag -> FilePath -> CommitNode -> [CommitNode] -> FilePath -> SelState ()
-ccEncode dag repo cnode@(dim,commit) parents f  = do
+ccEncode :: GitDag -> FilePath -> CommitNode -> FilePath -> SelState ()
+ccEncode dag repo cnode@(dim,commit) f  =
    StateT (\s ->  do
     let file = (repo ++ "/" ++ f)
     print ("In ccTrack block :" ++ file)
@@ -161,20 +147,42 @@ ccEncode dag repo cnode@(dim,commit) parents f  = do
          source <- readSFile file
          if not vexists 
            then do 
-              result <- writeVFile target ([],[Str source])
+              result <- writeVFile target cnode ([],[Str source])
               return ((),updateSel cnode f ([],[Str $ stripNewline source]) s) 
            else do
               let (sel,vs) = lookUpSel dag cnode f s
               let dtext = distill (dim) vs sel (stripNewline source)
-              writeVFile target ([],dtext)
+              writeVFile target cnode ((RSel dim):sel,dtext)
               return $ ((),updateSel cnode f ((RSel dim):sel,dtext) s) 
-                
-           )   
+    )   
 
 
-writeVFile :: FilePath -> (Selection,VString) -> IO ()
-writeVFile f (sel, vs) = 
+writeVFile :: FilePath -> CommitNode -> (Selection,VString) -> IO ()
+writeVFile f c (sel, vs) = do
   Exc.catch ( writeFile (f++".v") $ (T.pack $ showVText vs)) writeHandler
+  mexists <- doesFileExist (f++".m")
+  if not mexists then do
+    Exc.catch ( writeFile (f++".m") $ (mtemplate `append` serialize c sel)) writeHandler
+  else do
+    Exc.catch ( appendFile (f++".m") $ (serialize c sel)) writeHandler
+
+
+mtemplate :: Text
+mtemplate = T.pack "COMMIT ID:DIM|DATE|AUTHOR|VIEW DECISION\n"
+
+serialize :: CommitNode -> Selection -> Text
+serialize (id, Commit h a d _) sel = 
+  h `T.append` 
+   (T.pack ":") `T.append` 
+    (T.pack $ show id) `T.append`
+     (T.pack $ "|") `T.append`
+      (showDateTime d) `T.append`
+       (T.pack $ "|") `T.append`
+        a `T.append`
+         (T.pack $ "|") `T.append`
+          (T.pack $ show sel) `T.append`
+            (T.pack "\n")   
+
 
 readSFile :: FilePath -> IO Text
 readSFile f = Exc.catch (readFile f) readHandler >>= return

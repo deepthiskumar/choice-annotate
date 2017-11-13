@@ -2,7 +2,7 @@ module GitDag where
 
 import Prelude as P
 import Data.Graph.Inductive.Tree as T (Gr)
-import Data.Graph.Inductive.Graph as G --(mkGraph, insNode, insEdge)
+import Data.Graph.Inductive.Graph as G
 import Data.Graph.Inductive.Example (labUEdges)
 import Control.DeepSeq
 import Data.Map.Strict as M hiding (map, filter)
@@ -10,18 +10,16 @@ import Data.Maybe (fromMaybe)
 import Data.Tuple (swap)
 import Lib.Git.Type hiding (Commit)
 import Debug.Trace
---import Data.ByteString hiding (map, filter, head, take, drop, zip)
-import Data.ByteString.Char8 as B hiding (map, filter, head, drop, zip)
 import Data.Text as T
 import Data.Maybe
 import Data.DateTime
 import Text.Printf
 
-type CommitHash = ByteString
+type CommitHash = Text
 
 data Commit = Commit{
     commitID :: CommitHash,
-    author :: ByteString,
+    author :: Text,
     date :: DateTime,
     mergeCommit :: Maybe Merge}
       deriving(Show, Eq, Ord)
@@ -40,7 +38,7 @@ type GitDag = Gr Commit ()
 type CommitNode = LNode Commit
 type CommitEdge = UEdge
 
-type Line = ByteString
+type Line = Text
 type GitLog = [Line]
 
 type Repo = FilePath
@@ -98,37 +96,30 @@ gitlogP :: GitCtx GitLog
 gitlogP = do
    o <- gitExec "log" ["--pretty=format:%h|%p|%an|%cd", "--date=short", "--reverse"] []
    result "log" o
-
-{-gitDiffTreeRoot :: CommitHash -> GitCtx GitLog
-gitDiffTreeRoot commit = do
-    o <- gitExec "diff-tree" 
-      ["--no-commit-id", "--name-only", "-r", "--root", B.unpack commit] []
-    case o of
-      Right out -> return $ B.lines (B.pack out)
-      Left err  -> gitError err "Error while running git diff-tree --root"-}
       
 gitDiffTree :: CommitNode -> GitCtx GitLog
 gitDiffTree (n,c) = do
     if isRoot n then do
        o <- gitExec "diff-tree" 
-         ["--no-commit-id", "--name-only", "-r", "--root", B.unpack $ commitID c] []
+         ["--no-commit-id", "--name-only", "-r", "--root", T.unpack $ commitID c] []
        result "diff-tree --root" o
     else do
        o <- gitExec "diff-tree" 
-         ["--no-commit-id", "--name-only", "-r", B.unpack $ commitID c] []
+         ["--no-commit-id", "--name-only", "-r", T.unpack $ commitID c] []
        result "diff-tree" o
        
 gitMergeBase :: [CommitHash] -> GitCtx CommitHash
 gitMergeBase xs  = do
-    o <- gitExec "show-branch" ("--merge-base" : P.map B.unpack xs) []
+    o <- gitExec "show-branch" ("--merge-base" : P.map T.unpack xs) []
     case o of
-      Right out -> return (((B.take 7).(P.head).(B.lines).(B.pack)) out )
+      Right out -> return (((T.take 7).(P.head).(T.lines).(T.pack)) out )
       Left err  -> gitError err ("Error while running git show-branch --merge-base")
 
 --for octopus merge to work there should be any conflict. So no need to check that      
 gitConflictCheck :: CommitHash -> GitCtx [FilePath]
 gitConflictCheck c = do
-    o <- gitExec "-c" ["user.email='deepthi.s.kumar8@gmail.com'", "-c",  "user.name='Deepthi S Kumar'","merge", B.unpack c, "--no-commit"] []
+    o <- gitExec "-c" ["user.email='deepthi.s.kumar8@gmail.com'", "-c",
+      "user.name='Deepthi S Kumar'","merge", T.unpack c, "--no-commit"] []
     case o of
        Right out -> return []
        Left err  -> trace (show err) getConflictedFiles --(return $ parseConflictLog msg)
@@ -150,16 +141,16 @@ gitAbort = do
 gitCommitDiff :: CommitHash -> [CommitHash] -> GitCtx [(CommitHash,[FilePath])]
 gitCommitDiff lca []      = return []    
 gitCommitDiff lca (p:ps)  = do
-  o <- gitExec "diff" ["--name-only", ((B.unpack lca) ++ "..."++ (B.unpack p) )] []
+  o <- gitExec "diff" ["--name-only", ((T.unpack lca) ++ "..."++ (T.unpack p) )] []
   case o of
     Right out -> do {xs <- gitCommitDiff lca ps; return ((p, P.lines out):xs)}
     Left err -> gitError err ("Error while running git diff --name-only " 
-      ++ (B.unpack lca) ++ "..." ++ (B.unpack p))
+      ++ (T.unpack lca) ++ "..." ++ (T.unpack p))
     
 result :: String -> Either GitFailure String -> GitCtx GitLog
 result command o = do
     case o of
-      Right out -> return $ B.lines (B.pack out)
+      Right out -> return $ T.lines (T.pack out)
       Left err  -> gitError err ("Error while running git " ++ command)
 
 
@@ -175,7 +166,7 @@ buildListnMap r (l:ls) key (nMap, eList) = do
   let (commit,author,date,parents) = parseLog l
   let newList = P.map (\parent -> ((fst $ fromJust $ M.lookup parent nMap),key,())) parents
   if P.length parents > 1 then do
-    runGitCmd r (gitCheckout (B.unpack $ P.head parents))
+    runGitCmd r (gitCheckout (T.unpack $ P.head parents))
     lca <- runGitCmd r (gitMergeBase parents)
     modFiles <- runGitCmd r (gitCommitDiff lca parents)
     files <- runGitCmd r (gitConflictCheck (P.head $ P.tail parents))
@@ -186,24 +177,18 @@ buildListnMap r (l:ls) key (nMap, eList) = do
   else do
     let newMap  = M.insert commit (newCommitNode key commit author date Nothing) nMap
     buildListnMap r ls (key+1) (newMap, newList++eList)
-  
-  
-    {-where (commit,author,date,parents) = parseLog l--P.head $ P.take 1 $ B.words l
-          newMap  = M.insert commit (commitNode key commit author date Nothing) nMap --parents = P.drop 1 $ B.words l
-          newList = P.map (\parent -> ((fst $ fromJust $ M.lookup parent nMap),key,())) parents
-          --update merge details as well -}
 
 toNodeList :: Map CommitHash CommitNode -> [CommitNode]
 toNodeList m = P.map snd (M.toList m)  
 
-dateFormat = "%F"
+dateFormat = "%F" --same as %Y-%m-%d
 
-parseLog :: ByteString -> (CommitHash, ByteString, DateTime, [CommitHash])
-parseLog s = case B.split '|' s of
-    c:p:a:d:[] -> (c,a,fromJust $ parseDateTime dateFormat (B.unpack d),B.words p)
+parseLog :: Text -> (CommitHash, Text, DateTime, [CommitHash])
+parseLog s = case T.split (=='|') s of
+    c:p:a:d:[] -> (c,a,fromJust $ parseDateTime dateFormat (T.unpack d),T.words p)
     otherwise  -> error ("commit log parsing error: "++ show s) 
 
-newCommitNode :: Node -> CommitHash -> ByteString -> DateTime -> Maybe Merge -> CommitNode
+newCommitNode :: Node -> CommitHash -> Text -> DateTime -> Maybe Merge -> CommitNode
 newCommitNode n c a d m = (n, Commit c a d m)
 
 --TODO get conflicted files of the merge nodes
@@ -221,7 +206,7 @@ maybeParent dag n = case parent dag n of
   xs -> Just xs 
 
 matchCommitId :: CommitHash -> [CommitNode] -> CommitNode
-matchCommitId c [] = error ("No commit nodes to match "++ B.unpack c)
+matchCommitId c [] = error ("No commit nodes to match "++ T.unpack c)
 matchCommitId c (p@(_,(Commit c' _ _ _)):ps) 
    |c == c'  = p
    |otherwise  = matchCommitId c ps
@@ -244,6 +229,9 @@ findC c [] = error ("Commit node not found for commit id:" ++ show c)
 findC c (n@(i,(Commit h _ _ _)):ns) 
       | c == h    = n
       | otherwise = findC c ns
+      
+showDateTime :: DateTime -> Text
+showDateTime d = T.pack $ show d
 
 --Algorithm to encode
 --1. Start with the root
@@ -251,22 +239,19 @@ findC c (n@(i,(Commit h _ _ _)):ns)
 --3. When a a node has more than one child, encode both the first branch and then 
 
 
--- Do you really need to check merge conflicts? I guess will help in the merging. But nothing else
--- always compare a commit to its parent and store the selections in commit metadata for each commit
--- 1) When merging for no conflict, simply add the new choices into the latest Vstring
--- 2) When merging with conflicts
---    a) ours   
-
-
---TODO notes
+--Notes
 --git show-branch --merge-base = git merge-base --octopus
 {- author date vs commit date and author vs committer
-You may be wondering what the difference is between author and committer. The author is the person who originally wrote the patch, whereas the committer is the person who last applied the patch. So, if you send in a patch to a project and one of the core members applies the patch, both of you get credit — you as the author and the core member as the committer
+You may be wondering what the difference is between author and committer. 
+The author is the person who originally wrote the patch, whereas the committer is the 
+person who last applied the patch. So, if you send in a patch to a project and one of the 
+core members applies the patch, both of you get credit — you as the author and the 
+core member as the committer
 -}
 
 
 -- Examples
---TODO error handling inserting duplicate nodes
+--TODO error handling inserting duplicate nodes in the graph lib
 
 {-un = [1..5]
 
@@ -279,7 +264,7 @@ ues = labUEdges es
 g :: Gr String ()
 g = mkGraph ns ues
 
---First insert the node and then the edges so that the context (adjacencies) is updated TODO??
+--First insert the node and then the edges so that the context (adjacencies) is updated??
 
 --g' = insNode (5,"e") g
 g'' = insEdge (3,5,()) (insEdge (4,5,()) (insNode (5,"e") g) )
