@@ -119,7 +119,7 @@ gitMergeBase xs  = do
 gitConflictCheck :: CommitHash -> GitCtx [FilePath]
 gitConflictCheck c = do
     o <- gitExec "-c" ["user.email='deepthi.s.kumar8@gmail.com'", "-c",
-      "user.name='Deepthi S Kumar'","merge", T.unpack c, "--no-commit"] []
+      "user.name='Deepthi S Kumar'","merge", "--no-ff", T.unpack c, "--no-commit"] []
     case o of
        Right out -> return []
        Left err  -> trace (show err) getConflictedFiles --(return $ parseConflictLog msg)

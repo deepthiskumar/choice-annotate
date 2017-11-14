@@ -18,6 +18,10 @@ import Control.Monad.IO.Class
 import Control.Monad (foldM)
 import CCMerge
 import Data.List as L
+import Debug.Trace
+import GHC.IO.Encoding.UTF16
+import GHC.IO.Handle
+import System.IO (openFile, IOMode(..))
 
 --TODO
 {-
@@ -90,10 +94,20 @@ mergeCommitFiles repo dag c@(parents,id,com@(Commit h a d (Just m)),children) = 
 
 mergeAllFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState ()
 mergeAllFiles _ _ _ []                      = return ()
-mergeAllFiles repo mcommit dag ((f,cs):ms)  = do --need to be merged
-   newSel <- mergeFile mcommit dag (f,cs)
+mergeAllFiles repo mcommit dag ((f,[c]):ms) = do --Required for fast forward merges because the lca is the first parent
+   s <- get
+   let newSel = lookUpSel dag (nodeFromHash dag c) f s
+   put $ updateSel mcommit f newSel s
    liftIO $ writeVFile (repo ++ "/" ++ f) mcommit newSel
    mergeAllFiles repo mcommit dag ms
+mergeAllFiles repo mcommit dag ((f,cs):ms)  = do --need to be merged
+   let anc = (lca $ (fromJust $ mergeCommit $ snd mcommit))
+   if (nodeFromHash dag  anc) `elem` (parent dag (fst mcommit)) then do
+     mergeAllFiles repo mcommit dag ((f,cs\\[anc]):ms)
+   else do
+     newSel <- mergeFile mcommit dag (f,cs)
+     liftIO $ writeVFile (repo ++ "/" ++ f) mcommit newSel
+     mergeAllFiles repo mcommit dag ms
    
 mergeConflictedFiles :: FilePath -> CommitNode -> GitDag -> [(FilePath,[CommitHash])] -> SelState () 
 mergeConflictedFiles _ _ _ []                   = return ()
@@ -106,15 +120,27 @@ mergeConflictedFiles repo mcommit dag ((f,cs):ms)  = do
 mergeFile :: CommitNode -> GitDag -> (FilePath,[CommitHash]) -> SelState (Selection, VString)
 mergeFile mcommit dag (f,cs)  = do
    s <- get
-   --get first parent
-   let fpt = firstParent $ (fromJust $ mergeCommit $ snd mcommit)
+   --get first parent if present
+   let fpt = pickParent mcommit cs
    let sel = latestVS dag (f, cs \\ [fpt]) s
    --get commit from firstParent branch for f
    let p = lookUpSel dag (nodeFromHash dag fpt) f s
    --p should be given the priority hence foldr
-   let newSel = P.foldr (mergeVS) p sel
+   let newSel = P.foldr (merge) p sel
    put $ updateSel mcommit f newSel s
-   return newSel   
+   return newSel  
+
+merge :: (Selection,VString) -> (Selection,VString) -> (Selection,VString)
+merge vs vs' 
+   | vs == vs' = vs
+   | otherwise = mergeVS vs vs'  
+
+   
+pickParent :: CommitNode -> [CommitHash] -> CommitHash
+pickParent mcommit cs 
+    | firstParent 
+        (fromJust $ mergeCommit $ snd mcommit) `notElem` cs = L.head cs
+    | otherwise  = commitID $ snd mcommit
    
 latestVS :: GitDag -> (FilePath,[CommitHash]) -> RepoInfoMap -> [(Selection, VString)]
 latestVS _ (f,[]) _     = []
@@ -151,13 +177,23 @@ ccEncode dag repo cnode@(dim,commit) f  =
               return ((),updateSel cnode f ([],[Str $ stripNewline source]) s) 
            else do
               let (sel,vs) = lookUpSel dag cnode f s
+              --if dim  > 14 then do
+              print "printing intermediate"
+              writeVFile (target++".intr") cnode (sel,vs)
+              --else do writeVFile (target++".intr") cnode ([],[])
               let dtext = distill (dim) vs sel (stripNewline source)
               writeVFile target cnode ((RSel dim):sel,dtext)
+              {-if dim  == 16 then do
+                print "printing intermediate 14"
+                print dtext
+                error "Stop"
+              else do print ""-}
               return $ ((),updateSel cnode f ((RSel dim):sel,dtext) s) 
     )   
 
 
 writeVFile :: FilePath -> CommitNode -> (Selection,VString) -> IO ()
+writeVFile f c (_,[])    = return ()
 writeVFile f c (sel, vs) = do
   Exc.catch ( writeFile (f++".v") $ (T.pack $ showVText vs)) writeHandler
   mexists <- doesFileExist (f++".m")
@@ -185,8 +221,12 @@ serialize (id, Commit h a d _) sel =
 
 
 readSFile :: FilePath -> IO Text
-readSFile f = Exc.catch (readFile f) readHandler >>= return
-
+readSFile f = Exc.catch (I.readFile f) readHandler >>= return
+{-do
+    fhandle <- openFile f ReadMode
+    hSetEncoding fhandle utf16
+    Exc.catch (I.hGetContents fhandle) readHandler >>= return-}
+    
 lookUpSel :: GitDag -> CommitNode -> FilePath -> RepoInfoMap -> (Selection, VString)
 lookUpSel dag cnode f m =
    case lookup' cnode f m of

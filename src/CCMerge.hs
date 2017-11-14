@@ -42,9 +42,16 @@ import Data.List as L
 import CCLibPat
 import Pretty
 import Data.Text as T
+import qualified Data.Algorithm.Diff as D
+import Data.Algorithm.Patience as PatDiff
+import Debug.Trace
 
 type DimVText = (VString,Dim)
 type DimSegment = (Segment,Dim)
+
+
+data Action = Copy VString | Compare VString VString
+   deriving(Show)
 
 
 plain :: String -> VString
@@ -270,9 +277,14 @@ renameDimension ld cd (Chc d l r)
 mergeVText :: VString -> VString -> VString
 mergeVText [] (ds)       = (ds)
 mergeVText (ss) []       = (ss)
-mergeVText (s:ss) (d:ds) = mergeChoices s d ss ds
+mergeVText (s:ss) (d:ds) = let (seg, (l, r)) = mergeSegment s d--mergeChoices s d ss ds
+                           in case (l,r) of
+                             (Nothing, Nothing) -> seg : mergeVText ss ds
+                             (Just x, Nothing)  -> seg : mergeVText (x:ss) ds
+                             (Nothing, Just y)  -> seg : mergeVText ss (y:ds)
+                             (Just x, Just y)   -> seg : mergeVText (x:ss) (y:ds)
                                                                                         
-mergeChoices :: Segment -> Segment -> VString -> VString -> VString
+{-mergeChoices :: Segment -> Segment -> VString -> VString -> VString
 mergeChoices s@(Chc x [Str s'] r) d@(Chc y [Str d'] r') ss ds
   | T.null s' && T.null d' = let d' = mergeSegment s d
                                  ds' = mergeVText ss ds
@@ -285,17 +297,76 @@ mergeChoices s c@(Chc y [Str s'] r) ss ds
                   in (c : ds')
 mergeChoices s d ss ds = let d' = mergeSegment s d
                              ds' = mergeVText ss ds
-                         in (d' : ds')                                                        
+                         in (d' : ds') -}                                                       
 
-mergeSegment :: Segment -> Segment -> Segment
+
+mergeSegment :: Segment -> Segment -> (Segment, (Maybe Segment, Maybe Segment))
+mergeSegment x@(Str a) y@(Str b)
+    | a == b                             = (x,(Nothing,Nothing))
+    | otherwise                          = trace ("Case 1: "++show x ++ "|" ++ show y) undefined
+mergeSegment x@(Chc d l r) y@(Str a)
+    | isInsert x                         = (x, (Nothing, Just y))        
+    | a `isIn` (L.head l)                = (x, (Nothing, Nothing)) --delete or update
+mergeSegment x@(Str a) y@(Chc d' l' r')      
+    | isInsert y                         = (y, (Just x, Nothing))
+    | a `isIn` (L.head l')               = (y, (Nothing, Nothing))  
+mergeSegment x@(Chc d l r) y@(Chc d' l' r')
+    | x == y              = (x, (Nothing,Nothing))  
+    | d == d' && l == l'  = let (seg,(segs, segd)) = mergeSegment (L.head r) (L.head r')
+                            in (Chc d l [seg], (maybe Nothing (\v -> Just $ Chc d l [v]) segs,
+                              maybe Nothing (\v -> Just $ Chc d l [v]) segd))
+    | d == d' && r == r'  = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
+                            in (Chc d [seg] r, (maybe Nothing (\v -> Just $ Chc d [v] r) segs,
+                              maybe Nothing (\v -> Just $ Chc d [v] r) segd))
+    | d == d'             = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
+                                (seg',(segs', segd')) = mergeSegment (L.head r) (L.head r')
+                            in (Chc d [seg] [seg'], (makeSeg d segs segs',makeSeg d segd segd'))
+    | d /= d' && isInsert x && isInsert y = (branchInto x y, (Nothing,Nothing))
+    | d /= d' && isInsert x  = (x, (Nothing, Just y))
+    | d /= d' && isInsert y  = (y, (Just x, Nothing))
+    | d /= d' && hasOrIn x y = (branchInto x y, (Nothing,Nothing))
+mergeSegment x y             = trace ("See: "++show x ++ "|" ++ show y) undefined                       
+--    | otherwise
+
+makeSeg :: Dim -> Maybe Segment -> Maybe Segment -> Maybe Segment
+makeSeg d (Just x) (Just y) = Just (Chc d [x] [y])
+makeSeg _ _ _               = Nothing
+
+branchInto :: Segment -> Segment -> Segment
+branchInto x (Chc d [Str a] r) = Chc d [x] r
+branchInto x (Chc d [y@(Chc _ _ _)] r) = Chc d [branchInto x y] r  
+
+isInsert :: Segment -> Bool
+isInsert (Chc _ l _) = 
+   case L.head l of
+     Str x         -> T.null x
+     c@(Chc _ _ _) -> isInsert c
+
+hasOrIn :: Segment -> Segment -> Bool
+hasOrIn (Chc d [Str a] r) (Chc d' [Str b] r')
+    | a == b = True
+hasOrIn (Chc d [Str a] r) (Chc d' l' r')
+    | a `isIn` (L.head l') = True
+hasOrIn (Chc d l r) (Chc d' [Str b] r')
+    | b `isIn` (L.head l)  = True
+hasOrIn (Chc d l r) (Chc d' l' r') = hasOrIn (L.head l) (L.head l')
+hasOrIn _ _ = False
+          
+
+isIn :: Text -> Segment -> Bool
+isIn x (Str y)     = x == y
+isIn x (Chc d l r) = isIn x (L.head l)  
+
+
+{-mergeSegment :: Segment -> Segment -> Segment
 mergeSegment (Str a) (Str b)        = (Str b) --Invariant 1 If a character in the same position is different in both the files, then atleast either one has to be a choice
-mergeSegment (Chc d l r) (Str b)      = (Chc d l r)
-mergeSegment (Str a) (Chc d l r)      = (Chc d l r)
+mergeSegment (Chc d l r) (Str b)      = (Chc d l r) --what if l /= b
+mergeSegment (Str a) (Chc d l r)      = (Chc d l r) -- what if a /= l
 mergeSegment c1@(Chc d l r) c2@(Chc d' l' r')
    | c1 == c2 = c2
    | otherwise = mergeChoice c1 c2
-
-mergeChoice :: Segment -> Segment -> Segment
+-}
+{-mergeChoice :: Segment -> Segment -> Segment
 mergeChoice c1@(Chc d l r) c2@(Chc d' l' r')
   | d == d'   = case l == l' of --left or right alternative has changes
                  True  -> case r == r' of
@@ -306,6 +377,7 @@ mergeChoice c1@(Chc d l r) c2@(Chc d' l' r')
                            False -> undefined --TODO ** Chc d' [Chc d (mergeVText l l') r] r' Not even when the branches have inner branching? I guess no
                            --undefined --Chc d (mergeVText l l') (mergeVText r r') --Invariant 2. This is not allowed (an invariant we impose). A choice can have edits either in left or right alternatives. Not both
   | otherwise = (Chc d' [(mergeSegment c1 (L.head l'))] r')-- these are new choices introduced and put c1 in the left branch of c2
+-}
 
 maxDimensionS :: VString -> Int
 maxDimensionS vt = case dimensions vt of
@@ -323,11 +395,65 @@ mergeCCNew cd (vs,d) (vs',d') = let rs'= unifyVText $ mergeVText (vSplit vs) (vS
                                 in (rs', max d d')
                                 
 mergeVS :: (Selection,VString) -> (Selection,VString) -> (Selection,VString)
-mergeVS (s,vs) (s',vs') = (s `union` s', unifyVText $ mergeVText (vSplit vs) (vSplit vs'))
+mergeVS (s,vs) (s',vs') = ((nub s) `union` s', unifyVText $ mergeVText (vSplit vs) (vSplit vs'))
+
+mergeDiffVS :: VString -> VString -> VString
+mergeDiffVS vs vs' = processActions $ actions vs vs'
+
+processActions :: [Action] -> VString
+processActions [] = []
+processActions (Copy vs : as) = vs ++ processActions as
+processActions (Compare vs vs' : as) = (mergeVText vs vs') ++ processActions as  
                                 
-                                --TODO
-                                --CHNGE SPLIT TO TOKENIZE
-                                -- AND THEN GENERALIZE THIS
+
+---------find longest common subsequence between both the vstrings-------------
+--Split VStrings
+actions :: VString -> VString -> [Action]
+actions vs vs' = processPatDiff $ PatDiff.diff vs vs'--D.getGroupedDiff vs vs'
+
+
+processPatDiff :: [PatDiff.Item Segment] -> [Action]
+processPatDiff [] = []
+processPatDiff ((PatDiff.Old s) : ds) = 
+  let (olds, rem) = collectOld ds
+      (news, rem') = collectNew rem
+  in (Compare (s:olds) news) : processPatDiff rem'
+processPatDiff ((PatDiff.New s) : ds) = 
+  let (news, rem) = collectNew ds
+  in (Compare [] (s:news)) : processPatDiff rem
+processPatDiff (PatDiff.Both s _ : ds) = 
+  let (both, rem) = collectBoth ds
+  in (Copy (s:both)) : processPatDiff rem
+
+collectOld :: [PatDiff.Item Segment] -> (VString,[PatDiff.Item Segment])
+collectOld []           = ([],[])
+collectOld ((PatDiff.Old s) : is) = 
+  let p = collectOld is
+  in  (s : (fst p), snd $ p)
+collectOld is            = ([],is)
+
+collectNew :: [PatDiff.Item Segment] -> (VString,[PatDiff.Item Segment])
+collectNew []           = ([],[])
+collectNew ((PatDiff.New s) : is) =
+  let p = collectNew is
+  in  (s : (fst p), snd $ p)
+collectNew is            = ([],is)
+
+collectBoth :: [PatDiff.Item Segment] -> (VString,[PatDiff.Item Segment])
+collectBoth []           = ([],[])
+collectBoth ((PatDiff.Both s s') : is) =
+  let p = collectBoth is
+  in  (s : (fst p), snd $ p)
+collectBoth is            = ([],is)
+
+processDiff :: [D.Diff VString] -> [Action]
+processDiff []                 = []
+processDiff (D.Both vs _ : ds) = (Copy vs): processDiff ds
+processDiff (D.First vs : D.Second vs' : ds) = Compare vs vs' : processDiff ds
+processDiff (D.First vs : ds)  = Copy vs : processDiff ds
+processDiff (D.Second vs : ds) = Copy vs : processDiff ds 
+
+
 
 str :: String ->  Segment
 str s = Str $ T.pack s
@@ -420,8 +546,8 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 -- | Chain edits
 -- >>> showMerge $ mergeCCNew 0 ( [Chc 1 (plain "a b") ([Chc 2 (plain "x") (plain "z"),str " y"]),str " c"],2) (plain "a b c",0)
 -- "(1<a b,2<x,z> y> c,2)"
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 (plain "a b") ([Chc 2 (plain "x") (plain "z"),str " y"]),str " c"],2) ( [str "a ",Chc 3 (plain "b c") (plain "lm")],3)
--- "(1<a ,2<x,z> >3<1<b,y> c,lm>,3)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 (plain "a b") ([Chc 2 (plain "x") (plain "z"),str "\ny"]),str " c"],2) ( [str "a ",Chc 3 (plain "b c") (plain "lm")],3)
+-- "(1<a ,2<x,z>\n>3<1<b,y> c,lm>,3)"
 --
 -- | branch edits
 -- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) (plain "ab"),str " c"],2) (plain "x y c",0)
@@ -432,23 +558,23 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 -- "(2<1<x,y>,z>,2)"
 
 -- | branch and chain edits
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "y"]) ([Chc 3 (plain "a") (plain "l"),str "b"]),str "c"],3) (plain "xyc",0)
--- "(1<2<x,z>y,3<a,l>b>c,3)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) ([Chc 3 (plain "a") (plain "l"),str "\nb"]),str " c"],3) (plain "x y c",0)
+-- "(1<2<x,z> y,3<a,l>\nb> c,3)"
 --
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "y"]) ([Chc 3 (plain "ab") (plain "l")]),str "c"],3) (plain "xyc",0)
--- "(1<2<x,z>y,3<ab,l>>c,3)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) ([Chc 3 (plain "ab") (plain "l")]),str " c"],3) (plain "x y c",0)
+-- "(1<2<x,z> y,3<ab,l>> c,3)"
 --
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "y"]) ([Chc 3 (plain "ab") (plain "l"),str "d"]),str "c"],3) (plain "xyc",0)
--- "(1<2<x,z>y,3<ab,l>d>c,3)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) ([Chc 3 (plain "ab") (plain "l"),str "\nd"]),str " c"],3) (plain "x y c",0)
+-- "(1<2<x,z> y,3<ab,l>\nd> c,3)"
 --
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "y"]) ([Chc 3 (plain "a") ( [Chc 4 (plain "l") (plain "s")]),str "b"]),str "c"],4) (plain "xyc",0)
--- "(1<2<x,z>y,3<a,4<l,s>>b>c,4)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) ([Chc 3 (plain "a") ( [Chc 4 (plain "l") (plain "s")]),str "\nb"]),str " c"],4) (plain "x y c",0)
+-- "(1<2<x,z> y,3<a,4<l,s>>\nb> c,4)"
 --
 -- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) (plain "ab") ,str " c"],2) ( [str "x ",Chc 3 (plain "y c") ( [Chc 4 (plain "l") (plain "s"),str " m"])],4)
 -- "(1<2<x,z> ,ab>3<1<y,> c,4<l,s> m>,4)"
 --
--- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "\ny"]) ([Chc 3 (plain "a") (plain "l"),str " b"]),str " c"],3) ( [str "x ",Chc 4 (plain "y c") (plain "l")],4)
--- "(1<2<x,z>\n,3<a,l> >4<1<y,b> c,l>,4)"
+-- >>> showMerge $ mergeCCNew 0 ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str " y"]) ([Chc 3 (plain "a") (plain "l"),str "\nb"]),str " c"],3) ( [str "x ",Chc 4 (plain "y c") (plain "l")],4)
+-- "(1<2<x,z> ,3<a,l>\n>4<1<y,b> c,l>,4)"
 --
 -- | Changes in both the branches. There can only be changes in one branch --**Update: Can there can be inner branches and chain edits in both the outer branches? **update: No
 -- >> showMerge $ mergeCCNew 1 () ()
@@ -465,10 +591,10 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 --
 -- | Branch after some modifications - i,e., there are some common dimesnions in both the VTexts
 --
--- >>> showMerge $ mergeCCNew 1 ( [Chc 1 ([str "ab"]) ([str "xy"]), str "cde"],1 ) ( [Chc 1 ([str "ab"]) ([Chc 2 (plain "x") (plain "i"),str "y"]), str "cde"],2)
--- "(1<ab,2<x,i>y>cde,2)"
--- >>> showMerge $ mergeCCNew 1 ( [Chc 1 ([str "ab"]) ([Chc 2 (plain "x") (plain "i"),str "y"]), str "cde"],2 ) ( [Chc 1 ([str "ab"]) ([str "xy"]), str "cde"],1)
--- "(1<ab,2<x,i>y>cde,2)"
+-- >>> showMerge $ mergeCCNew 1 ( [Chc 1 ([str "ab"]) ([str "x y"]), str "cde"],1 ) ( [Chc 1 ([str "ab"]) ([Chc 2 (plain "x") (plain "i"),str " y"]), str "cde"],2)
+-- "(1<ab,2<x,i> y>cde,2)"
+-- >>> showMerge $ mergeCCNew 1 ( [Chc 1 ([str "ab"]) ([Chc 2 (plain "x") (plain "i"),str " y"]), str "cde"],2 ) ( [Chc 1 ([str "ab"]) ([str "x y"]), str "cde"],1)
+-- "(1<ab,2<x,i> y>cde,2)"
 --
 -- | Chain edits
 -- >>> showMerge $ mergeCCNew 2 ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),str "y"]),str "c"],2) ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),Chc 3 (plain "y") (plain "i")]),str "c"],3)
@@ -483,6 +609,13 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 -- | **update invalid editing scenario
 -- >> showMerge $ mergeCCNew 2 ( [Chc 1 ([Chc 2 ([Chc 3 (plain "x") (plain "i") ]) (plain "z"),str "y"]) ([Chc 4 (plain "a") ([Chc 5 (plain "j") (plain "k")]),str "b"]),str "c"],3) ( [Chc 1 ([Chc 2 (plain "x") (plain "z"),str "y"]) ([Chc 4 (plain "a") (plain "j"),str "b"]),str "c"],2)
 -- (*** Exception: Prelude.undefined
--- >>>showMerge $ mergeCCNew 0 ([Chc 2 [Chc 3 (plain "x") (plain "i")] (plain "z"), str "yc"],3) ([Chc 1 [Chc 2 (plain "x") (plain "z"), str "y"] [Chc 4 (plain "a") (plain "j"), str "b"], str "c"],4)
--- "(1<2<3<x,i>,z>y,4<a,j>b>c,4)"
+-- >>>showMerge $ mergeCCNew 0 ([Chc 4 [Chc 5 (plain "x") (plain "i")] (plain "z"), str " y c"],3) ([Chc 1 [Chc 2 (plain "x") (plain "z"), str " y"] [Chc 3 (plain "a") (plain "j"), str "\nb"], str " c"],4)
+-- "(1<2<4<5<x,i>,z>,z> y,3<a,j>\nb> c,4)"
+--
+-- | conflicting merges
+-- >>> showVText $ snd $ mergeVS ([RSel 1],[Chc 1 [str ""] [str "a ",Chc 2 [str ""] [str "b ", Chc 13 [str "\n\n\n"] [str "\n\nc x\n"], str "d "], Chc 4 [str "e"] [str "f"] ]]) ([RSel 2],[Chc 1 [str ""] [str "a ",Chc 2 [str ""] [str "b \n\n\nd "], Chc 4 [str "e"] [str "f"] ]])
+-- "1<,a 2<,b 13<\n\n\n,\n\nc x\n>d >4<e,f>>"
+-- >>> showVText $ snd $ mergeVS ([],[Chc 1 [str ""] [str "hi "]]) ([], [Chc 1 [str ""] [Chc 2[str ""][str "he ll o"], str "hi "]])
+-- "1<,2<,he ll o>hi >"
+--
 

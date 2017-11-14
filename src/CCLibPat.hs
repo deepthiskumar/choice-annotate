@@ -20,7 +20,7 @@ module CCLibPat where
   type Dim = Int
 
   data Segment = Str Text | Chc Dim VString VString
-             deriving(Show, Eq, Generic, NFData)
+             deriving(Show, Eq, Generic, NFData, Ord)
 
   --intermediate vstring that has tokens.
   --This is to maintain the tokens instead of the tokenize-concat-tokenize-concat
@@ -120,8 +120,8 @@ module CCLibPat where
 
   diffBoundaries :: [Diff a] -> [Int]
   diffBoundaries [] = []
-  diffBoundaries ((Same x):ds) = 0:L.length x:diffBoundaries ds --0 : (map (+ length x) $ diffBoundaries ds)
-  diffBoundaries ((Different x _):ds) = 0:L.length x:diffBoundaries ds--0 : (map (+ length x) $ diffBoundaries ds)
+  diffBoundaries ((Same x):ds) = 0:L.length x:diffBoundaries ds --0 : (L.map (+ L.length x) $ diffBoundaries ds)
+  diffBoundaries ((Different x _):ds) = 0:L.length x:diffBoundaries ds -- 0 : (L.map (+ L.length x) $ diffBoundaries ds)
 
   diffL :: [Diff a] -> [a]
   diffL [] = []
@@ -288,9 +288,16 @@ module CCLibPat where
   d s ((Str x):vs) (b:bs) = plainHelper (L.length (tokenizer x) `compare` b) s x vs (b:bs) 
           
   plainHelper :: Ordering -> Selection -> Text -> VString -> [Int] -> (VString, [Int])
-  plainHelper EQ s x vs (b:bs) = ((^:) $ (Str x)) $ (z s vs bs)
-  plainHelper LT s x vs (b:bs) = trace("LT :"++ show x ++ " b= " ++ show b ++ " VS: " ++ show vs) undefined --unknown case
+  plainHelper EQ s x vs (b:bs) = (^:) (Str x) (z s vs bs)--(b:bs))
+  plainHelper LT s x vs (b:bs) 
+     | T.null x            = (Str x) ^: (d s vs (b:bs))
+     | otherwise           = trace("LT :"++ show x ++ " b= " ++ show b ++ ":"++ show bs ++ " VS: " ++ show vs) undefined
+     --((Str x) ^: (d s vs (bs'' x (b:bs)))) --unknown case
   plainHelper GT s x vs (b:bs) = (Str (T.concat (x' b x))) ^: (z' s x (T.length (T.concat (x' b x))) vs (b:bs))
+  
+  bs1' (b:bs) = (L.map (subtract b) $ b:bs)
+  
+  bs'' x (b:bs) = L.map (subtract $ L.length (tokenizer x)) (b:bs)
   
   x' :: Int -> Text -> [Text]
   x' b x = (L.take $ b) $ (tokenizer $ x)
@@ -299,10 +306,14 @@ module CCLibPat where
   x'' b x  = (L.drop $ b) $ (tokenizer $ x)
   
   z :: Selection -> VString -> [Int] -> (VString, [Int])
-  z s vs bs = (((d $ s) $ (vs)) $ bs)--tail bs1')
+  z s vs bs = d s vs bs--(L.tail $ bs1' bs) --bs
   
   z' :: Selection -> Text -> Int -> VString -> [Int] -> (VString, [Int])
-  z' s x rem vs (b:bs) = d s ((Str (T.drop rem x )) :vs) bs--(((d $ s) $!! ((Str $ (T.concat $!! (x'' b x))):vs)) $!! bs)
+  z' s x rem vs (b:bs) = d s ((Str (T.drop rem x )) :vs) bs
+  
+  
+  {-z' :: Selection -> Text -> Int -> VString -> [Int] -> (VString, [Int])
+  z' s x rem vs (b:bs) = d s ((Str $ T.concat $ x'' b x) : vs)(L.tail $ bs1' (b:bs)) --d s ((Str (T.drop rem x )) :vs) (L.tail $ bs1' (b:bs))--bs--(((d $ s) $!! ((Str $ (T.concat $!! (x'' b x))):vs)) $!! bs)-}
   
   
         
@@ -361,11 +372,11 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
 --------------------------------------------------------------------------------
 
   distill :: Int -> VString -> Selection -> Text -> VString
-  distill dim v s n = (normalize $ fst $ ((l $ pv) $ d)) --deepseq pv
+  distill dim v s n = {-trace (show pv ++ "\n" ++ show d)-} (normalize $ fst $ ((l $ pv) $ d)) --deepseq pv
     where
       (o, m) = s `applySelectionWithMap` v
       d      = ((partitionDiff $ ((tokenizer $ o) -?- (tokenizer $ n))) $ L.map fst m)
-      pv     = {-trace (" Boundaries: "++ show (diffBoundaries $ d))-} (((denormalizeV $ s) $ v) $ diffBoundaries $ d)
+      pv     = {-trace ("Partitioned Diffs: "++ show d ++ " Boundaries: "++ show (diffBoundaries $ d))-} (((denormalizeV $ s) $ v) $ diffBoundaries $ d)
 
       (^:) :: Segment-> (VString, [Diff Text]) -> (VString, [Diff Text])
       x ^: (y, z) = ((x:y), z)
@@ -375,9 +386,16 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
       l [] di@((Different [] x):ds) = {-trace ("1. [] and "++ show di)-} ([Chc dim [] [Str (T.concat x)]], ds)
 
       l [] ds = ([], ds)
+      
+      l [Str x] [] 
+         | T.null x = ([Str x], [])
+         |otherwise = {-trace ("3."++ show x)-} undefined
 
       -- Unchanged plain text:
-      l vt@((Str x):vs) dif@((Same _):ds) = {-trace ("2."++ show vt ++ " and "++ show dif)-} (Str x ^: (l vs ds))
+      l vt@((Str x):vs) dif@((Same y):ds)
+        | T.null x         = (Str x) ^: l vs dif --empty String
+        |  x == T.concat y = {-trace ("2."++ show vt ++ " and "++ show dif)-} (Str x ^: (l vs ds))
+        | otherwise = {-trace ("2."++ show x ++ " and "++ show y)-} undefined
 
       -- Addition:
       l vs dif@((Different [] x):ds) = {-trace ("3."++ show vs ++ " and "++ show dif)-} (Chc dim [] ([Str (T.concat x)]) ^: (l vs ds))
@@ -400,4 +418,4 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
             where
               (x', ds') = l x ds
       
-      l vs ds = trace (show vs ++ " and " ++ show ds) undefined
+      l vs ds = {-trace (show vs ++ " and " ++ show ds)-} undefined
