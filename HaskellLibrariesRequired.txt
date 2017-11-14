@@ -41,7 +41,7 @@ sudo ghc-pkg unregister --force vector
 ghc -prof -fprof-auto -rtsopts -O2 -v GitEncode.hs
 
 ./GitEncode "/home/eecs/Documents/gitRepos/test1" master +RTS -hc -L100
-
+./GitEncode "/home/eecs/Documents/gitRepos/GitEncodeTestRepos/Encoded/git-flight-rules/" master > git-flight-rules.log 2>&1
 -------------------------------------------------------------------------------------------------------------------------------
 cabal upgrade
 
