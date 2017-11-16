@@ -209,7 +209,7 @@ mtemplate = T.pack "COMMIT ID:DIM|DATE|AUTHOR|VIEW DECISION\n"
 serialize :: CommitNode -> Selection -> Text
 serialize (id, Commit h a d _) sel = 
   h `T.append` 
-   (T.pack ":") `T.append` 
+   (T.pack "|") `T.append` 
     (T.pack $ show id) `T.append`
      (T.pack $ "|") `T.append`
       (showDateTime d) `T.append`
@@ -259,12 +259,12 @@ fileMap cnode f m = case M.lookup cnode m of
 
 writeHandler :: IOError -> IO ()
 writeHandler e = do 
-  P.putStrLn ("Something went wrong during write operation: " ++ show e)   
+  P.putStrLn ("Error occurred during write operation: " ++ show e)   
   return ()
   
 readHandler :: IOError -> IO Text
 readHandler e = do 
-  P.putStrLn ("Something went wrong during read operation: " ++ show e)   
+  P.putStrLn ("Error occurred during read operation: " ++ show e)   
   return $ T.empty
 
 nextDimensionS :: VString -> Int
