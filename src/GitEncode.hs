@@ -41,7 +41,7 @@ type SelState a = StateT RepoInfoMap IO a
 start = do
    args <- getArgs
    let b = L.null args
-   if b then error "Usage: <Repository Name> <Branch Name>"
+   if b then error "Usage: <Repository directory> <Branch Name>"
    else do
     let repo = P.head args
     let branch = ((P.head).(P.tail)) args
