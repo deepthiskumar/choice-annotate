@@ -1,4 +1,4 @@
---module GitEncode where
+module GitEncode where
 
 import Prelude as P hiding (readFile, writeFile, appendFile)
 import Data.Text.IO as I
@@ -9,7 +9,6 @@ import Data.Text as T
 import Text.Printf (printf)
 import Control.Exception as Exc
 import System.Directory (doesFileExist)
---import Data.ByteString.Char8 as B hiding (putStrLn, writeFile, readFile)
 import Data.Map as M hiding ((\\))
 import Data.Graph.Inductive.Graph
 import Control.Monad.Trans.State
@@ -39,8 +38,11 @@ type RepoInfoMap = Map CommitNode FileMap
 
 type SelState a = StateT RepoInfoMap IO a
 
-main = do
-    args <- getArgs
+start = do
+   args <- getArgs
+   let b = L.null args
+   if b then error "Usage: <Repository Name> <Branch Name>"
+   else do
     let repo = P.head args
     let branch = ((P.head).(P.tail)) args
     --create a dag from the commits

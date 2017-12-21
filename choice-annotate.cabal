@@ -15,7 +15,7 @@ cabal-version:       >=1.10
 
 library
   hs-source-dirs:      src
-  exposed-modules:     CCLibPat, VText, Pretty, GitDag, CCMerge
+  exposed-modules:     CCLibPat, VText, Pretty, GitDag, CCMerge, GitEncode
   build-depends:       base >= 4.9.0.0 && < 5,
                        deepseq,
                        parsec,
@@ -34,7 +34,7 @@ library
 
 executable choice-annotate-exe
   hs-source-dirs:      app
-  main-is:             GitEncode.hs
+  main-is:             Main.hs
   ghc-options:         -threaded -rtsopts -with-rtsopts=-N
   build-depends:       base,
                        choice-annotate,
