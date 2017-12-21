@@ -206,6 +206,13 @@ getPlainChar s
 --
 -- >>> showVText $ vSplit ( [Chc 1 (plain "ab ij") ([Chc 2 (plain "xy jk") (plain "zl"),str "y m n"]),str "cr ty"])
 -- "1<ab,2<xy,zl>>1< ,2< ,>>1<ij,2<jk,>>1<,y>1<, >1<,m>1<, >1<,n>cr ty"
+-- >>> showVText $ vSplit ([Chc 1 (plain "x y") [Chc 2 (plain "") (plain "a "), str"l"]])
+-- "1<,2<,a>>1<,2<, >>1<x,l>1< ,>1<y,>"
+-- >>> showVText $ vSplit ([Chc 1 ([str "x ",Chc 3 (plain "") (plain"b "), str "y"]) [Chc 2 (plain "") (plain "a "), str"l"]])
+-- "1<,2<,a>>1<,2<, >>1<x,l>1< ,>1<3<,b>,>1<3<, >,>1<y,>"
+-- >>> showVText $ vSplit ([Chc 1 ([str "x\n",Chc 3 (plain "") (plain"b "), str "y"]) [str "l m"]])
+-- "1<x,l>1<\n, >1<3<,b>,>1<3<, >,>1<y,m>"
+
 
 --Done
 vSplit::VString -> VString
@@ -226,9 +233,22 @@ splitSegment (Chc d l r) = case (l,r) of
                             ([],ys)                     -> splitSegment (Chc d (plain "") ys )
                             (xs,[])                     -> splitSegment (Chc d xs (plain ""))
                             (Str x : xs,Str y : ys) -> (Chc d [Str x] [Str y]) : (splitSegment (Chc d xs ys))
-                            (x : xs, y : ys)            -> let (x':xs') =  splitSegment x
-                                                               (y':ys') =  splitSegment y
-                                                           in (Chc d [x'] [y']) : splitSegment (Chc d (xs'++xs) (ys'++ys))
+                            (x : xs, y : ys)            -> let (c,xs',ys') =  splitSegmentInsert d (splitSegment x) (splitSegment y) 
+                                                           in (c) : splitSegment (Chc d (xs'++xs) (ys'++ys))
+                                                           
+splitSegmentInsert :: Dim -> [Segment] -> [Segment] -> (Segment,[Segment],[Segment])
+splitSegmentInsert d ((Str a):ls) ((Str b):rs) = ((Chc d [Str a] [Str b]), ls, rs) 
+splitSegmentInsert d ((Str a):ls) (r:rs)
+    | isInsert r && (not $ T.null a) = ((Chc d (plain "") [r]),((Str a):ls), rs)
+    | otherwise  = ((Chc d [Str a] [r]), ls, rs)  
+splitSegmentInsert d (l:ls) ((Str b):rs)
+    | isInsert l && (not $ T.null b)= ((Chc d [l] (plain "")), ls, ((Str b):rs)) 
+    | otherwise  = ((Chc d [l] [(Str b)]), ls, rs)
+splitSegmentInsert d (l:ls) (r:rs)
+--    | isInsert l && isInsert r = ((Chc d [l] [r]), ls, rs) Should still be stored separately
+    | isInsert r = ((Chc d (plain "") [r]),(l:ls), rs)
+    | isInsert l = ((Chc d [l] (plain "")), ls, (r:rs))
+    | otherwise  = ((Chc d [l] [r]), ls, rs)                                                        
 
 unifyVText :: VString -> VString
 unifyVText []       = []
@@ -277,12 +297,16 @@ renameDimension ld cd (Chc d l r)
 mergeVText :: VString -> VString -> VString
 mergeVText [] (ds)       = (ds)
 mergeVText (ss) []       = (ss)
-mergeVText (s:ss) (d:ds) = let (seg, (l, r)) = mergeSegment s d--mergeChoices s d ss ds
+mergeVText (s:ss) (d:ds) = let (seg, (l, r)) =trace ("MergevText L:" ++ show (s:(gethead ss)) ++"\nMergevText R:" ++show (d:(gethead ds))) (mergeSegment s d)--mergeChoices s d ss ds
                            in case (l,r) of
                              (Nothing, Nothing) -> seg : mergeVText ss ds
                              (Just x, Nothing)  -> seg : mergeVText (x:ss) ds
                              (Nothing, Just y)  -> seg : mergeVText ss (y:ds)
                              (Just x, Just y)   -> seg : mergeVText (x:ss) (y:ds)
+                             
+gethead :: [a] -> [a]
+gethead [] = []
+gethead (a:as) = [a]
                                                                                         
 {-mergeChoices :: Segment -> Segment -> VString -> VString -> VString
 mergeChoices s@(Chc x [Str s'] r) d@(Chc y [Str d'] r') ss ds
@@ -303,29 +327,44 @@ mergeChoices s d ss ds = let d' = mergeSegment s d
 mergeSegment :: Segment -> Segment -> (Segment, (Maybe Segment, Maybe Segment))
 mergeSegment x@(Str a) y@(Str b)
     | a == b                             = (x,(Nothing,Nothing))
-    | otherwise                          = trace ("Case 1: "++show x ++ "|" ++ show y) undefined
+    | otherwise                          = trace ("Case 1: "++show x ++ "|" ++ show y) undefined--(x,(Nothing,Just y))
 mergeSegment x@(Chc d l r) y@(Str a)
+    | isInsert x && T.null a             = (x, (Nothing, Nothing))
     | isInsert x                         = (x, (Nothing, Just y))        
     | a `isIn` (L.head l)                = (x, (Nothing, Nothing)) --delete or update
-mergeSegment x@(Str a) y@(Chc d' l' r')      
+    | otherwise                          = trace ("See: "++show x ++ "|" ++ show y) undefined--(x,(Nothing,Just y))
+mergeSegment x@(Str a) y@(Chc d' l' r')   
+    | isInsert y && T.null a             = (y, (Nothing, Nothing))
     | isInsert y                         = (y, (Just x, Nothing))
     | a `isIn` (L.head l')               = (y, (Nothing, Nothing))  
+    | otherwise                          = trace ("See: "++show x ++ "|" ++ show y) undefined --(y,(Just x,Nothing))
 mergeSegment x@(Chc d l r) y@(Chc d' l' r')
-    | x == y              = (x, (Nothing,Nothing))  
+    | x == y             = (x, (Nothing,Nothing)) 
+    | d == d' && l == l' && isInsert (L.head r) && isInsert (L.head r') = let (seg,(segs,segd)) = mergeSegment (L.head r) (L.head r')
+       in (Chc d' l [seg],(maybe Nothing (\v -> Just $ Chc d l [v]) segs, maybe Nothing (\v -> Just $ Chc d l [v]) segd))
+    | d == d' && l == l' && isInsert (L.head r) = (x, (Nothing, Just y))
+    | d == d' && l == l' && isInsert (L.head r') = (y, (Just x, Nothing))
     | d == d' && l == l'  = let (seg,(segs, segd)) = mergeSegment (L.head r) (L.head r')
                             in (Chc d l [seg], (maybe Nothing (\v -> Just $ Chc d l [v]) segs,
                               maybe Nothing (\v -> Just $ Chc d l [v]) segd))
+    | d == d' && r == r' && isInsert (L.head l) && isInsert (L.head l') = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
+        in (Chc d [seg] r, (maybe Nothing (\v -> Just $ Chc d [v] r) segs,
+                              maybe Nothing (\v -> Just $ Chc d [v] r) segd))
+    | d == d' && r == r' && isInsert (L.head l) = (x, (Nothing, Just y))
+    | d == d' && r == r' && isInsert (L.head l') = (y, (Just x, Nothing))
     | d == d' && r == r'  = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
                             in (Chc d [seg] r, (maybe Nothing (\v -> Just $ Chc d [v] r) segs,
                               maybe Nothing (\v -> Just $ Chc d [v] r) segd))
-    | d == d'             = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
-                                (seg',(segs', segd')) = mergeSegment (L.head r) (L.head r')
-                            in (Chc d [seg] [seg'], (makeSeg d segs segs',makeSeg d segd segd'))
+    | d == d' && isInsert x = (x, (Nothing, Just y))
+    | d == d' && isInsert y = (y, (Just x, Nothing))
+    | d == d'               = let (seg,(segs, segd)) = mergeSegment (L.head l) (L.head l')
+                                  (seg',(segs', segd')) = mergeSegment (L.head r) (L.head r')
+                              in (Chc d [seg] [seg'], (makeSeg d segs segs',makeSeg d segd segd'))
     | d /= d' && isInsert x && isInsert y = (branchInto x y, (Nothing,Nothing))
     | d /= d' && isInsert x  = (x, (Nothing, Just y))
     | d /= d' && isInsert y  = (y, (Just x, Nothing))
-    | d /= d' && hasOrIn x y = (branchInto x y, (Nothing,Nothing))
-mergeSegment x y             = trace ("See: "++show x ++ "|" ++ show y) undefined                       
+    | d /= d' && x `hasOrIn` y = (branchInto x y, (Nothing,Nothing))
+--mergeSegment x y             = trace ("See: "++show x ++ "|" ++ show y) undefined                       
 --    | otherwise
 
 makeSeg :: Dim -> Maybe Segment -> Maybe Segment -> Maybe Segment
@@ -337,6 +376,7 @@ branchInto x (Chc d [Str a] r) = Chc d [x] r
 branchInto x (Chc d [y@(Chc _ _ _)] r) = Chc d [branchInto x y] r  
 
 isInsert :: Segment -> Bool
+isInsert (Str _)     = False
 isInsert (Chc _ l _) = 
    case L.head l of
      Str x         -> T.null x
@@ -597,8 +637,8 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 -- "(1<ab,2<x,i> y>cde,2)"
 --
 -- | Chain edits
--- >>> showMerge $ mergeCCNew 2 ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),str "y"]),str "c"],2) ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),Chc 3 (plain "y") (plain "i")]),str "c"],3)
--- "(1<ab,2<x,z>3<y,i>>c,3)"
+-- >>> showMerge $ mergeCCNew 2 ( [Chc 1 (plain "a b") ([Chc 2 (plain "x") (plain "z"),str "\ny"]),str " c"],2) ( [Chc 1 (plain "a b") ([Chc 2 (plain "x") (plain "z"),str "\n",Chc 3 (plain "y") (plain "i")]),str " c"],3)
+-- "(1<a b,2<x,z>\n3<y,i>> c,3)"
 -- >>> showMerge $ mergeCCNew 2 ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),Chc 3 (plain "y") (plain "i")]),str "c"],3) ( [Chc 1 (plain "ab") ([Chc 2 (plain "x") (plain "z"),str "y"]),str "c"],2)
 -- "(1<ab,2<x,z>3<y,i>>c,3)"
 --
@@ -617,5 +657,7 @@ showMerge (v,d) = "(" ++ showVText v ++","++show d++")"
 -- "1<,a 2<,b 13<\n\n\n,\n\nc x\n>d >4<e,f>>"
 -- >>> showVText $ snd $ mergeVS ([],[Chc 1 [str ""] [str "hi "]]) ([], [Chc 1 [str ""] [Chc 2[str ""][str "he ll o"], str "hi "]])
 -- "1<,2<,he ll o>hi >"
+--
+-- >>> showVText $ snd $ mergeVS ([],([Chc 1 ([str "x\n",Chc 3 (plain "") (plain"b "), str "y"]) [str "l m"]])) ([],([Chc 1 ([str "x\n",Chc 3 (plain "") (plain"b "), str "y"]) [Chc 2 [str ""] [str "a "] ,str "l m"]]))
 --
 

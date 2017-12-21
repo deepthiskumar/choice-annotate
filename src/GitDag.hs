@@ -58,8 +58,13 @@ runGitCmd repo command = runGit (makeConfig repo (Just "/usr/bin/git")) command
 commitContext :: GitDag -> Node -> Context Commit ()
 commitContext = G.context
 
-children :: GitDag -> Int -> [Context Commit ()]
-children g n =  [G.context g n'| n' <- ns, isJust (lab g n' ) ]
+childrenCtx :: GitDag -> Int -> [Context Commit ()]
+childrenCtx g n =  [G.context g n'| n' <- ns, isJust (lab g n' ) ]
+    where 
+      ns = suc g n
+      
+children :: GitDag -> Int -> [CommitNode]
+children g n = [(n',fromJust $ lab g n')| n' <- ns, isJust (lab g n' ) ]
     where 
       ns = suc g n
       
@@ -94,7 +99,7 @@ gitCheckout b = do
 --present in order to add the edge coming from it
 gitlogP :: GitCtx GitLog
 gitlogP = do
-   o <- gitExec "log" ["--pretty=format:%h|%p|%an|%cd", "--date=short", "--reverse"] []
+   o <- gitExec "log" ["--pretty=format:%H|%P|%an|%cd", "--date=short", "--reverse"] []
    result "log" o
       
 gitDiffTree :: CommitNode -> GitCtx GitLog
@@ -112,7 +117,7 @@ gitMergeBase :: [CommitHash] -> GitCtx CommitHash
 gitMergeBase xs  = do
     o <- gitExec "show-branch" ("--merge-base" : P.map T.unpack xs) []
     case o of
-      Right out -> return (((T.take 7).(P.head).(T.lines).(T.pack)) out )
+      Right out -> return (((P.head).(T.lines).(T.pack)) out )
       Left err  -> gitError err ("Error while running git show-branch --merge-base")
 
 --for octopus merge to work there should be any conflict. So no need to check that      
@@ -136,7 +141,7 @@ gitAbort = do
    o <- gitExec "merge" ["--abort"] []
    case o of
       Right out -> return ()
-      Left err  -> gitError err ("Error while running git merge --abort")
+      Left err  -> return ()--gitError err ("Error while running git merge --abort")
 
 gitCommitDiff :: CommitHash -> [CommitHash] -> GitCtx [(CommitHash,[FilePath])]
 gitCommitDiff lca []      = return []    

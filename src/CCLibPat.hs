@@ -7,6 +7,7 @@ module CCLibPat where
   import Text.ParserCombinators.Parsec
   import Text.ParserCombinators.Parsec.Char
   import qualified Data.Algorithm.Patience as D
+  --import Data.Algorithm.Diff as DD
   import Data.List.Split
   import Pretty
   import Debug.Trace ( trace )
@@ -49,18 +50,18 @@ module CCLibPat where
 --  Customized diff
 --------------------------------------------------------------------------------
 
-  data Diff a = Same ![a] | Different ![a] ![a] deriving (Show, Generic, NFData)
+  data DiffG a = Same ![a] | Different ![a] ![a] deriving (Show, Generic, NFData)
   
   data Edit a = Add !a | Delete !a | Update !a !a | NoChange !a
 
-  collectDiff :: [D.Item a] -> [Diff a]
+  collectDiff :: [D.Item a] -> [DiffG a]
   collectDiff [] = []
   collectDiff ((D.Both x _):ds) = appendD (NoChange x) (collectDiff ds)
   collectDiff ((D.Old x):(D.New y):ds) = appendD (Update x y) (collectDiff ds) --update
   collectDiff ((D.Old x):ds) = appendD (Delete x) (collectDiff ds) --delete
   collectDiff ((D.New x):ds) = appendD (Add x) (collectDiff ds) --insert
 
-  appendD :: Edit a -> [Diff a] -> [Diff a]
+  appendD :: Edit a -> [DiffG a] -> [DiffG a]
   appendD (Add x) (Different [] y : ds)       = (Different [] (x:y)) : ds
   appendD (Delete x) (Different y [] : ds)    = (Different (x:y) []) : ds
   --appendD (Add x) (Different y [] : ds)       = (Different [] (x:y)) : ds
@@ -76,11 +77,24 @@ module CCLibPat where
 --let v = f k x in v `seq` Tip k v
 -- gives the diff output. custom diff so that the 'Both' data contructor can be changed to take only single argument 
 --and identify different typed of changes ie., change, delete, insert
-  (-?-) :: [Text] -> [Text] -> [Diff Text]
+  (-?-) :: [Text] -> [Text] -> [DiffG Text]
   old -?- new = collectDiff $ D.diff old new
+  
+{-  collectDiff :: [DD.Diff [a]] -> [DiffG a]
+  collectDiff [] = []
+  collectDiff ((DD.Both x _):ds) = Same x : collectDiff ds
+  collectDiff ((DD.First x):(DD.Second y):ds) = Different x y : collectDiff ds --update
+  collectDiff ((DD.First x):ds) = Different x [] : collectDiff ds --delete
+  collectDiff ((DD.Second x):ds) = Different [] x : collectDiff ds --insert
+
+--let v = f k x in v `seq` Tip k v
+-- gives the diff output. custom diff so that the 'Both' data contructor can be changed to take only single argument 
+--and identify different typed of changes ie., change, delete, insert
+  (-?-) :: [Text] -> [Text] -> [DiffG Text]
+  old -?- new = collectDiff $ DD.getGroupedDiff old new-}
 
 
-  _diffAsCC :: [Diff Char] -> String
+  _diffAsCC :: [DiffG Char] -> String
   _diffAsCC [] = ""
   _diffAsCC ((Same x):ds) = x ++ _diffAsCC ds
   _diffAsCC ((Different x y):ds) = L.concat [
@@ -95,10 +109,10 @@ module CCLibPat where
       _diffAsCC ds
     ]
 
-  partitionDiff :: Show a => [Diff a] -> [Int] -> [Diff a]
+  partitionDiff :: Show a => [DiffG a] -> [Int] -> [DiffG a]
   partitionDiff d bs = p d bs {-trace ("PartDiff: "++ show res)-}
     where
-      p :: Show a => [Diff a] -> [Int] -> [Diff a]
+      p :: Show a => [DiffG a] -> [Int] -> [DiffG a]
       p [] _ = []
       p ds [] = ds
       p ds (0:bs) = p ds bs
@@ -118,17 +132,23 @@ module CCLibPat where
               y'   = L.take b y
               y''  = L.drop b y
 
-  diffBoundaries :: [Diff a] -> [Int]
+  diffBoundaries :: [DiffG a] -> [Int]
+  diffBoundaries [] = []
+  diffBoundaries ((Same x):ds) = 0 : (L.map (+ L.length x) $! diffBoundaries ds)
+  diffBoundaries ((Different x _):ds) = 0 : (L.map (+ L.length x) $! diffBoundaries ds) 
+
+{-  diffBoundaries :: [DiffG a] -> [Int]
   diffBoundaries [] = []
   diffBoundaries ((Same x):ds) = 0:L.length x:diffBoundaries ds --0 : (L.map (+ L.length x) $ diffBoundaries ds)
-  diffBoundaries ((Different x _):ds) = 0:L.length x:diffBoundaries ds -- 0 : (L.map (+ L.length x) $ diffBoundaries ds)
+  diffBoundaries ((Different x _):ds) = 0:L.length x:diffBoundaries ds -- 0 : (L.map (+ L.length x) $ diffBoundaries ds)-}
+  
 
-  diffL :: [Diff a] -> [a]
+  diffL :: [DiffG a] -> [a]
   diffL [] = []
   diffL ((Same x):ds) = x ++ diffL ds
   diffL ((Different x _):ds) = x ++ diffL ds
 
-  diffR :: [Diff a] -> [a]
+  diffR :: [DiffG a] -> [a]
   diffR [] = []
   diffR ((Same x):ds) = x ++ diffR ds
   diffR ((Different _ x):ds) = x ++ diffR ds
@@ -146,7 +166,12 @@ module CCLibPat where
   
   --tokenizes into words and also maintains the spaces between them as tokens.
   tokenizer :: Text -> [Text]
-  tokenizer s 
+  tokenizer s
+    | T.null s = []
+    | otherwise = tokenizer' s
+  
+  tokenizer' :: Text -> [Text]
+  tokenizer' s 
     | T.null s  = []
     | otherwise = 
       let (spaces, s1) = T.break (/=' ') s
@@ -154,7 +179,7 @@ module CCLibPat where
           (line, s3)   = T.break (=='\n') s2
           words        = getwords line
           (nlines,s4)  = T.break (/= '\n') s3
-      in noEmpty spaces ++ noEmpty lines ++ words ++ noEmpty nlines ++ tokenizer s4
+      in noEmpty spaces ++ noEmpty lines ++ words ++ noEmpty nlines ++ tokenizer' s4
     
   getwords :: Text -> [Text]
   getwords line  
@@ -168,9 +193,14 @@ module CCLibPat where
        u (spaces, s2) word1 = noEmpty word1 ++ noEmpty spaces ++ getwords s2
    
    
-  noEmpty :: Text -> [Text]
-  noEmpty s  
+  noEmptyS :: Text -> [Text]
+  noEmptyS s  
     | T.null s  = []
+    | otherwise = T.take 1 s : (noEmpty (T.drop 1 s))
+    
+  noEmpty :: Text -> [Text]
+  noEmpty s 
+    | T.null s = []
     | otherwise = [s]
   
 --  Parsers
@@ -180,7 +210,7 @@ module CCLibPat where
   ccFile = do
     doc <- many ccConstruct
     eof
-    return doc
+    return (emptyStr doc)
 
   ccConstruct :: GenParser Char st (Segment)
   ccConstruct = do
@@ -203,7 +233,11 @@ module CCLibPat where
     right <- many ccConstruct
     string escape
     char '>'
-    return $ Chc (read dim :: Int) left right
+    return $ Chc (read dim :: Int) (emptyStr left) (emptyStr right)
+    
+  emptyStr :: VString -> VString
+  emptyStr [] = [Str T.empty]
+  emptyStr xs = xs
 
   ccParser :: String -> Either ParseError VString
   ccParser = parse ccFile ""
@@ -273,7 +307,30 @@ module CCLibPat where
   (^:) :: Segment -> (VString, [Int]) -> (VString, [Int])
   x ^: (y, z) = ((x:y), z)
 
+
   d :: Selection -> VString -> [Int] -> (VString, [Int])
+  d _ ([]) bs = ([], bs)
+  d _ vs [] = (vs, [])
+  d s vs (0:bs) = d s vs bs
+  d s (((Chc dim l r):vs)) bs = case dim `asSelectedIn` s of
+        L -> e id   l r
+        R -> e flip r l
+        where
+          e f x y = ((f $! Chc dim) x' y) ^: (d s (vs) bs')
+            where
+              (x', bs') = d s x bs
+  d s (((Str x):vs)) (b:bs) = case L.length (tokenizer x) `compare` b of
+        EQ -> (Str x) ^: (d s (vs) $! L.tail bs')
+        LT -> (Str x) ^: (d s ( vs) bs'')
+        GT -> (Str (T.concat x')) ^: (d s (((Str y'):vs)) $ L.tail bs')
+        where
+          bs'   = L.map (subtract b) (b:bs)
+          bs''  = L.map (subtract $ L.length (tokenizer x)) (b:bs)
+          x'    = L.take b (tokenizer x)
+          x''   = L.drop b (tokenizer x)
+          y'    = T.drop (T.length (T.concat (x'))) x
+ 
+  {-d :: Selection -> VString -> [Int] -> (VString, [Int])
   d _ [] bs = ([], bs)
   d _ vs [] = (vs, [])
   d s vs (0:bs) = d s vs bs
@@ -291,7 +348,8 @@ module CCLibPat where
   plainHelper EQ s x vs (b:bs) = (^:) (Str x) (z s vs bs)--(b:bs))
   plainHelper LT s x vs (b:bs) 
      | T.null x            = (Str x) ^: (d s vs (b:bs))
-     | otherwise           = trace("LT :"++ show x ++ " b= " ++ show b ++ ":"++ show bs ++ " VS: " ++ show vs) undefined
+     | otherwise           = trace("LT :"++ show x ++ " b= " ++ show b ++ ":"++ show bs ++ " VS: " ++ show vs) 
+            ((Str x) ^: (d s vs ((subtract (L.length (tokenizer x)) b):bs)))
      --((Str x) ^: (d s vs (bs'' x (b:bs)))) --unknown case
   plainHelper GT s x vs (b:bs) = (Str (T.concat (x' b x))) ^: (z' s x (T.length (T.concat (x' b x))) vs (b:bs))
   
@@ -309,8 +367,8 @@ module CCLibPat where
   z s vs bs = d s vs bs--(L.tail $ bs1' bs) --bs
   
   z' :: Selection -> Text -> Int -> VString -> [Int] -> (VString, [Int])
-  z' s x rem vs (b:bs) = d s ((Str (T.drop rem x )) :vs) bs
-  
+  z' s x rem vs (b:bs) = d s ((Str (T.drop rem x )) :vs) bs-}
+   
   
   {-z' :: Selection -> Text -> Int -> VString -> [Int] -> (VString, [Int])
   z' s x rem vs (b:bs) = d s ((Str $ T.concat $ x'' b x) : vs)(L.tail $ bs1' (b:bs)) --d s ((Str (T.drop rem x )) :vs) (L.tail $ bs1' (b:bs))--bs--(((d $ s) $!! ((Str $ (T.concat $!! (x'' b x))):vs)) $!! bs)-}
@@ -378,10 +436,10 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
       d      = ((partitionDiff $ ((tokenizer $ o) -?- (tokenizer $ n))) $ L.map fst m)
       pv     = {-trace ("Partitioned Diffs: "++ show d ++ " Boundaries: "++ show (diffBoundaries $ d))-} (((denormalizeV $ s) $ v) $ diffBoundaries $ d)
 
-      (^:) :: Segment-> (VString, [Diff Text]) -> (VString, [Diff Text])
+      (^:) :: Segment-> (VString, [DiffG Text]) -> (VString, [DiffG Text])
       x ^: (y, z) = ((x:y), z)
 
-      l :: VString -> [Diff Text] -> (VString, [Diff Text])
+      l :: VString -> [DiffG Text] -> (VString, [DiffG Text])
 
       l [] di@((Different [] x):ds) = {-trace ("1. [] and "++ show di)-} ([Chc dim [] [Str (T.concat x)]], ds)
 
@@ -389,13 +447,13 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
       
       l [Str x] [] 
          | T.null x = ([Str x], [])
-         |otherwise = {-trace ("3."++ show x)-} undefined
+         |otherwise = trace ("3."++ show x) ([Str x], [])
 
       -- Unchanged plain text:
-      l vt@((Str x):vs) dif@((Same y):ds)
+      l vt@((Str x):vs) dif@((Same y):ds) -- = (Str x ^: (l vs ds))
         | T.null x         = (Str x) ^: l vs dif --empty String
         |  x == T.concat y = {-trace ("2."++ show vt ++ " and "++ show dif)-} (Str x ^: (l vs ds))
-        | otherwise = {-trace ("2."++ show x ++ " and "++ show y)-} undefined
+        | otherwise = trace ("2."++ show x ++ " and "++ show y) (Str x) ^: l vs ds
 
       -- Addition:
       l vs dif@((Different [] x):ds) = {-trace ("3."++ show vs ++ " and "++ show dif)-} (Chc dim [] ([Str (T.concat x)]) ^: (l vs ds))
@@ -407,7 +465,7 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
       -- Changed plain:
       l vt@((Str x):vs) dif@((Different x' y):ds) = {-trace ("5."++ show vt ++ " and "++ show dif)-} (if x == (T.concat x')
         then Chc dim [Str x] [Str (T.concat y)] ^: (l vs ds)
-        else error $ L.concat [ "Mismatch ", show vt, " /= ", show x', " and ", show y ])
+        else Chc dim [Str (T.concat x')] [Str (T.concat y)] ^: (l vs ds))--error $ L.concat [ "Mismatch ", show vt, " /= ", show x', " and ", show y ])
 
       -- Recurse downward along choice:
       l vt@((Chc dim' left right):vs) ds = {-trace ("6."++ show vt ++ " and "++ show ds)-} (case dim' `asSelectedIn` s of
@@ -418,4 +476,4 @@ sepSegments xs = case last xs of --last takes O(n). Use sequence which has const
             where
               (x', ds') = l x ds
       
-      l vs ds = {-trace (show vs ++ " and " ++ show ds)-} undefined
+      l vs ds = trace ("7."++show vs ++ " and " ++ show ds) (vs,[]) 
