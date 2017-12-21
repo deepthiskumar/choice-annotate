@@ -1,0 +1,64 @@
+name:                choice-annotate
+version:             0.1.0.0
+-- synopsis:
+-- description:
+homepage:            https://github.com/deepthiskumar/choice-annotate#readme
+license:             BSD3
+license-file:        LICENSE
+author:              Deepthi S Kumar
+maintainer:          
+copyright:           
+--category:            Desktop
+build-type:          Simple
+extra-source-files:  README.md
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     CCLibPat, VText, Pretty, GitDag, CCMerge
+  build-depends:       base >= 4.9.0.0 && < 5,
+                       deepseq,
+                       parsec,
+                       patience,
+                       split,
+                       containers,
+                       strict,
+                       directory,
+                       text,
+                       fgl,
+                       transformers,
+                       libgit,
+                       datetime,
+                       Diff
+  default-language:    Haskell2010
+
+executable choice-annotate-exe
+  hs-source-dirs:      app
+  main-is:             GitEncode.hs
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  build-depends:       base,
+                       choice-annotate,
+                       strict,
+                       directory,
+                       deepseq,
+                       text,
+                       containers,
+                       fgl,
+                       transformers,
+                       libgit,
+                       datetime,
+                       Diff
+  default-language:    Haskell2010
+
+test-suite choice-annotate-test
+  type:                exitcode-stdio-1.0
+  hs-source-dirs:      test
+  main-is:             Spec.hs
+  build-depends:       base
+                     , choice-annotate
+  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
+  default-language:    Haskell2010
+
+source-repository head
+  type:     git
+  location: https://github.com/deepthiskumar/choice-annotate

@@ -1,5 +1,8 @@
 {-# LANGUAGE FlexibleInstances, ScopedTypeVariables, DeriveGeneric, DeriveAnyClass #-}
 
+{- Note: This is the modified/enhanced version of the distill functionality implemented by Wyatt Allen, Variational parsing with the choice calculus. Master’s thesis, Oregon
+State University, 2014. -}
+
 module CCLibPat where
 
   import Data.List as L

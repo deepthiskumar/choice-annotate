@@ -1,0 +1,19 @@
+resolver: lts-9.9 # Inherits GHC version and package set
+compiler: ghc-8.0.1 # Overwrites GHC version in the resolver
+
+name: cc-snapshot
+
+# Additional packages, follows extra-deps syntax
+packages:
+- patience-0.1.1
+- hashable-1.2.4.0
+- text-1.2.2.1
+- parsec-3.1.11
+- containers-0.5.7.1
+- strict-0.3.2
+- directory-1.2.6.2
+- fgl-5.6.0.0
+- transformers-0.5.2.0
+- libgit-0.3.1
+- datetime-0.3.1
+- Diff-0.3.4
