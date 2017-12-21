@@ -1,14 +1,9 @@
 name:                choice-annotate
 version:             0.1.0.0
--- synopsis:
--- description:
 homepage:            https://github.com/deepthiskumar/choice-annotate#readme
-license:             BSD3
-license-file:        LICENSE
 author:              Deepthi S Kumar
 maintainer:          
 copyright:           
---category:            Desktop
 build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
