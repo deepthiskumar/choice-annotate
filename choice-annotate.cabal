@@ -3,7 +3,9 @@ version:             0.1.0.0
 homepage:            https://github.com/deepthiskumar/choice-annotate#readme
 author:              Deepthi S Kumar
 maintainer:          
-copyright:           
+copyright:           2017 Deepthi S Kumar
+license:             Apache2
+license-file:        LICENSE           
 build-type:          Simple
 extra-source-files:  README.md
 cabal-version:       >=1.10
